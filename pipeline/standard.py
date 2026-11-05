@@ -132,6 +132,44 @@ ITEMS: list[Item] = [
 ]
 ITEM_BY_KEY = {i.key: i for i in ITEMS}
 
+# ---------------- 일치 수준 ----------------
+# exact   정의 일치      : 표준 항목과 같은 개념의 계정/태그
+# proxy   대체(조건 확인): 정의는 다르지만, 차이를 만드는 요소가 그 해에 없음을 확인했으므로 값이 같다
+# scope   범위 차이 가능 : 정의가 달라 값이 다를 수 있다. 지표 계산 시 주의
+# derived 항등식 파생    : 원본에 없어 회계 항등식으로 계산
+MATCH_LABEL = {"exact": "정의 일치", "proxy": "대체(조건 확인)", "scope": "범위 차이 가능", "derived": "항등식 파생"}
+
+# 미국 태그 중 정의가 표준과 다른 것: (항목, 태그) → (조건, 조건 불충족 시 처리, 설명)
+#   조건 nci    : 그 해 비지배지분이 없거나 0  (MinorityInterest, NetIncomeLossAttributableToNoncontrollingInterest)
+#   조건 equity : 그 해 지분법손익이 없거나 0  (IncomeLossFromEquityMethodInvestments)
+#   조건 disc   : 그 해 중단영업이 없거나 0
+#   조건 None   : 확인할 방법이 없음 → 항상 scope
+#   처리 drop   : 값을 쓰지 않음(빈칸) / scope: 쓰되 '범위 차이 가능'으로 표시
+US_TAG_RULES: dict[tuple[str, str], tuple[str | None, str, str]] = {
+    ("net_income", "us-gaap:NetIncomeLoss"):
+        ("nci", "drop", "지배주주 몫 순이익. 비지배지분이 있으면 연결 순이익과 달라 사용하지 않음"),
+    ("equity_total", "us-gaap:StockholdersEquity"):
+        ("nci", "drop", "지배주주 몫 자본. 비지배지분이 있으면 자본총계와 달라 사용하지 않음"),
+    ("pretax_income", "us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"):
+        ("equity", "scope", "지분법손익을 제외한 세전이익. 국내 기준(지분법손익 포함)과 지분법손익만큼 다름"),
+    ("capex", "us-gaap:PaymentsToAcquireProductiveAssets"):
+        (None, "scope", "유형자산 외 생산용 자산(내부용 소프트웨어 등)이 포함될 수 있음"),
+    ("dividends_paid", "us-gaap:PaymentsOfDividendsCommonStock"):
+        (None, "scope", "보통주 배당만 포함 (우선주·비지배주주 배당 제외)"),
+    ("operating_cf", "us-gaap:NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"):
+        ("disc", "scope", "계속영업분만 포함 (중단영업 현금흐름 제외)"),
+    ("investing_cf", "us-gaap:NetCashProvidedByUsedInInvestingActivitiesContinuingOperations"):
+        ("disc", "scope", "계속영업분만 포함 (중단영업 현금흐름 제외)"),
+    ("financing_cf", "us-gaap:NetCashProvidedByUsedInFinancingActivitiesContinuingOperations"):
+        ("disc", "scope", "계속영업분만 포함 (중단영업 현금흐름 제외)"),
+}
+NCI_TAGS = ("us-gaap:MinorityInterest", "us-gaap:NetIncomeLossAttributableToNoncontrollingInterest")
+EQUITY_METHOD_TAGS = ("us-gaap:IncomeLossFromEquityMethodInvestments",)
+DISCONTINUED_TAGS = ("us-gaap:IncomeLossFromDiscontinuedOperationsNetOfTax",
+                     "us-gaap:IncomeLossFromDiscontinuedOperationsNetOfTaxAttributableToReportingEntity",
+                     "us-gaap:CashProvidedByUsedInOperatingActivitiesDiscontinuedOperations",
+                     "us-gaap:CashProvidedByUsedInDiscontinuedOperations")
+
 # 회계기준 차이 중 숫자 매핑으로 해결되지 않는 것들 (해석할 때 반드시 고려)
 STANDARD_GAPS = [
     ("리스 (IFRS16 vs ASC842)", "IFRS: 모든 리스를 자산·부채로 인식하고 비용은 감가상각+이자로 나뉨 → 영업이익·EBITDA·영업현금흐름이 "
@@ -207,6 +245,7 @@ def _kr(company_id: str) -> pd.DataFrame:
         "value": raw["thstrm_amount"], "currency": raw["currency"].fillna("KRW"),
         "source": raw["account_nm"] + "  [" + raw["account_id"].fillna("") + "]  (" + raw["sj_nm"] + ", " + raw["fs_div"] + ")",
         "filing": raw["rcept_no"], "method": raw["method"],
+        "match": "exact", "match_note": "",
     })
 
 
@@ -235,20 +274,42 @@ def _us(company_id: str) -> pd.DataFrame:
     first = df.sort_values("filed").groupby("year").head(1)
     anchor = dict(zip(first["year"], first["accn"]))
 
+    # 조건 확인용: 연도별로 비지배지분 / 지분법손익이 0이 아닌 값으로 보고됐는지
+    def present(tags) -> set[int]:
+        s = df[df["full_tag"].isin(tags) & df["val"].fillna(0).ne(0)]
+        return set(s["year"].astype(int))
+    has = {"nci": present(NCI_TAGS), "equity": present(EQUITY_METHOD_TAGS), "disc": present(DISCONTINUED_TAGS)}
+
     out = []
     for it in ITEMS:
         cands = df[df["full_tag"].isin(it.us_tags)].copy()
         if cands.empty:
             continue
         cands = cands[cands["unit"] == (f"{currency}/shares" if it.kind == "per_share" else currency)]
+        cands["year"] = cands["year"].astype(int)
+        cands["match"], cands["match_note"] = "exact", ""
+        keep = pd.Series(True, index=cands.index)
+        for (key, tag), (cond, on_fail, note) in US_TAG_RULES.items():
+            if key != it.key:
+                continue
+            m = cands["full_tag"] == tag
+            ok = cands["year"].isin(has[cond]).map(lambda b: not b) if cond else pd.Series(False, index=cands.index)
+            cands.loc[m & ok, ["match", "match_note"]] = ["proxy", f"{note} → 그 해 해당 요소 없음 확인"]
+            cands.loc[m & ~ok, ["match", "match_note"]] = ["scope", note]
+            if on_fail == "drop":
+                keep &= ~(m & ~ok)
+        cands = cands[keep]
         cands["prio"] = cands["full_tag"].map({t: i for i, t in enumerate(it.us_tags)})
         cands["off_anchor"] = cands["accn"] != cands["year"].map(anchor)
-        cands = cands.sort_values(["off_anchor", "prio", "filed"]).drop_duplicates("year")
+        cands["match_rank"] = cands["match"].map({"exact": 0, "proxy": 1, "scope": 2})
+        # 같은 공시 안에서는 정의 일치 > 대체 > 범위 차이 순, 그다음 태그 우선순위
+        cands = cands.sort_values(["off_anchor", "match_rank", "prio", "filed"]).drop_duplicates("year")
         out.append(pd.DataFrame({
-            "item": it.key, "year": cands["year"].astype(int), "period_end": cands["end"],
+            "item": it.key, "year": cands["year"], "period_end": cands["end"],
             "value": cands["val"], "currency": cands["unit"].str.split("/").str[0],
             "source": cands["full_tag"] + "  (" + cands["label"] + ")",
             "filing": cands["accn"], "method": "tag",
+            "match": cands["match"], "match_note": cands["match_note"],
         }))
     return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
 
@@ -275,7 +336,8 @@ def _finalize(df: pd.DataFrame) -> pd.DataFrame:
         df = pd.concat([df, pd.DataFrame({
             "item": target, "year": calc.index, "period_end": meta.loc[calc.index, "period_end"].values,
             "value": calc.values, "currency": meta.loc[calc.index, "currency"].values,
-            "source": label, "filing": meta.loc[calc.index, "filing"].values, "method": "derived"})],
+            "source": label, "filing": meta.loc[calc.index, "filing"].values, "method": "derived",
+            "match": "derived", "match_note": label})],
             ignore_index=True)
 
     derive("total_liabilities", "total_assets", "equity_total", "파생: 자산총계 − 자본총계")
@@ -326,9 +388,19 @@ def standardize(company_id: str) -> pd.DataFrame:
     return _finalize(df).reset_index(drop=True)
 
 
-def wide(df: pd.DataFrame) -> pd.DataFrame:
-    """[표준항목 × 연도] 표 (값만)."""
-    t = df.pivot_table(index="item", columns="year", values="value", aggfunc="first")
+def wide(df: pd.DataFrame, values: str = "value") -> pd.DataFrame:
+    """[표준항목 × 연도] 표. values='match' 면 일치 수준 표."""
+    t = df.pivot_table(index="item", columns="year", values=values, aggfunc="first")
     t = t.reindex([i.key for i in ITEMS if i.key in t.index])
     t.index = [ITEM_BY_KEY[k].name for k in t.index]
     return t
+
+
+def match_summary(df: pd.DataFrame) -> pd.DataFrame:
+    """항목별 일치 수준 집계 + 정의가 다른 경우의 설명."""
+    s = df.groupby(["item", "match"]).agg(years=("year", lambda y: ", ".join(map(str, sorted(y)))),
+                                          note=("match_note", "first")).reset_index()
+    s = s[s["match"] != "exact"]
+    s["item"] = s["item"].map(lambda k: ITEM_BY_KEY[k].name)
+    s["match"] = s["match"].map(MATCH_LABEL)
+    return s.rename(columns={"item": "항목", "match": "일치 수준", "years": "연도", "note": "내용"})

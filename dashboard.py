@@ -125,18 +125,29 @@ with tab_std:
                          hide_index=True)
 
         w = standard.wide(sdf)
+        mw = standard.wide(sdf, values="match").reindex_like(w)
         scale = st.radio("표시 단위", ["원 단위", "백만", "십억"], horizontal=True, key="std_scale")
         div = {"원 단위": 1, "백만": 1e6, "십억": 1e9}[scale]
         per_share = standard.ITEM_BY_KEY["eps_basic"].name
         shown = w.copy()
         shown.loc[shown.index != per_share] = shown.loc[shown.index != per_share] / div
-        st.dataframe(shown.style.format("{:,.2f}" if div > 1 else "{:,.0f}", na_rep="—"), width="stretch")
-        st.caption("— = 원본에 없음 (추측해서 채우지 않음). 주당이익은 단위 변환하지 않음.")
+        colors = {"proxy": "background-color: #fff4c2", "scope": "background-color: #ffd9b3",
+                  "derived": "background-color: #dbeafe"}
+        styled = (shown.style.format("{:,.2f}" if div > 1 else "{:,.0f}", na_rep="—")
+                  .apply(lambda _: mw.map(lambda m: colors.get(m, "")), axis=None))
+        st.dataframe(styled, width="stretch")
+        st.caption("칸 색 = 표준 정의와의 일치 수준 · 흰색 **정의 일치** · 노랑 **대체(조건 확인)**: 정의는 다르지만 "
+                   "차이를 만드는 요소가 그 해에 없어 값이 같음 · 주황 **범위 차이 가능**: 지표 계산 시 주의 · "
+                   "파랑 **항등식 파생** · — = 원본에 없음(추측해서 채우지 않음) · 주당이익은 단위 변환 안 함")
+        ms = standard.match_summary(sdf)
+        if not ms.empty:
+            st.dataframe(ms, hide_index=True, width="stretch")
 
         with st.expander("값마다 원본 출처 보기 (원본 계정·태그, 공시번호, 매핑 근거)"):
             names = {i.key: i.name for i in standard.ITEMS}
             pick = st.selectbox("항목", list(dict.fromkeys(sdf["item"])), format_func=names.get)
-            st.dataframe(sdf[sdf["item"] == pick][["year", "period_end", "value", "currency", "source", "filing", "method"]],
+            view = sdf[sdf["item"] == pick].assign(match=lambda d: d["match"].map(standard.MATCH_LABEL))
+            st.dataframe(view[["year", "period_end", "value", "currency", "match", "source", "filing", "method", "match_note"]],
                          hide_index=True, width="stretch")
             st.caption("method: name+code·name·code = 국내 매핑 근거(계정명/표준코드), tag = SEC XBRL 태그, "
                        "derived = 회계 항등식으로 파생, +abs = 지출 항목 부호를 양수로 통일")

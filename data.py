@@ -96,6 +96,12 @@ def main() -> None:
         ends = df.groupby("year")["period_end"].first()
         print(f"통화 {cur} | 기간 종료일: " + ", ".join(f"{y}={e}" for y, e in ends.items()) + "\n")
         print(standard.wide(df).to_string())
+        mark = {"exact": "·", "proxy": "P", "scope": "S", "derived": "D"}
+        print("\n[일치 수준] ·=정의 일치  P=대체(조건 확인)  S=범위 차이 가능  D=항등식 파생")
+        print(standard.wide(df, values="match").map(lambda m: mark.get(m, "-") if isinstance(m, str) else "-").to_string())
+        ms = standard.match_summary(df)
+        if not ms.empty:
+            print(ms.to_string(index=False))
         ch = standard.checks(df)
         bad = ch[~ch["ok"]]
         print(f"\n[검증] {len(ch) - len(bad)}/{len(ch)} 통과")
@@ -103,7 +109,7 @@ def main() -> None:
             print(f"  ✗ {r.year} {r.check} {r.detail}")
         if a.source:
             print("\n[출처]")
-            print(df[["item", "year", "value", "source", "filing", "method"]].to_string(index=False))
+            print(df[["item", "year", "value", "match", "source", "filing", "method"]].to_string(index=False))
         print("\n[method] name+code/name/code=국내 매핑 근거, tag=SEC 태그, derived=항등식 파생, +abs=부호 정규화")
     elif a.cmd == "filings":
         f = service.filings(cid)
