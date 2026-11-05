@@ -6,6 +6,7 @@
   uv run data.py fin 삼성전자 [계정명]       # 재무제표 원본 (연도별)
   uv run data.py filings 삼성전자 [키워드]   # 공시 목록
   uv run data.py profile 삼성전자           # 기업개황 원본
+  uv run data.py std 삼성전자 [--source]    # 표준 재무항목 (국내·해외 비교용) + 검증 결과
   uv run data.py list                      # 수집된 기업 목록
 """
 import argparse
@@ -14,7 +15,7 @@ import sys
 
 import pandas as pd
 
-from pipeline import service
+from pipeline import service, standard
 
 sys.stdout.reconfigure(encoding="utf-8")
 pd.set_option("display.width", 250)
@@ -50,11 +51,12 @@ def print_candidates(results: list[dict]) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("cmd", choices=["search", "get", "fin", "filings", "profile", "list"])
+    p.add_argument("cmd", choices=["search", "get", "fin", "filings", "profile", "std", "list"])
     p.add_argument("query", nargs="?")
     p.add_argument("filter", nargs="?", help="fin: 계정명/태그 일부, filings: 공시명 키워드")
     p.add_argument("--pick", type=int, help="검색 후보 번호")
     p.add_argument("--refresh", action="store_true")
+    p.add_argument("--source", action="store_true", help="std: 값마다 원본 계정·공시번호 표시")
     a = p.parse_args()
 
     if a.cmd == "list":
@@ -84,6 +86,25 @@ def main() -> None:
         print(f.head(10).to_string(index=False))
     elif a.cmd == "profile":
         print(json.dumps(c["profile"], ensure_ascii=False, indent=2))
+    elif a.cmd == "std":
+        df = standard.standardize(cid)
+        if df.empty:
+            sys.exit("표준화할 재무 데이터가 없습니다.")
+        if standard.is_financial(c):
+            print("[주의] 금융업: 매출·유동자산 등 일반 기업 항목으로 비교하면 안 됩니다.\n")
+        cur = "/".join(df["currency"].dropna().unique())
+        ends = df.groupby("year")["period_end"].first()
+        print(f"통화 {cur} | 기간 종료일: " + ", ".join(f"{y}={e}" for y, e in ends.items()) + "\n")
+        print(standard.wide(df).to_string())
+        ch = standard.checks(df)
+        bad = ch[~ch["ok"]]
+        print(f"\n[검증] {len(ch) - len(bad)}/{len(ch)} 통과")
+        for r in bad.itertuples():
+            print(f"  ✗ {r.year} {r.check} {r.detail}")
+        if a.source:
+            print("\n[출처]")
+            print(df[["item", "year", "value", "source", "filing", "method"]].to_string(index=False))
+        print("\n[method] name+code/name/code=국내 매핑 근거, tag=SEC 태그, derived=항등식 파생, +abs=부호 정규화")
     elif a.cmd == "filings":
         f = service.filings(cid)
         if a.filter:

@@ -8,7 +8,7 @@ import json
 import pandas as pd
 import streamlit as st
 
-from pipeline import service
+from pipeline import service, standard
 from pipeline.config import REFRESH_DAYS, YEARS, dart_key
 
 st.set_page_config(page_title="기업 원본 데이터 탐색기", layout="wide")
@@ -97,7 +97,56 @@ src = "DART (금융감독원 전자공시)" if c["market"] == "KR" else "SEC EDG
 col1.subheader(f"{c['name']}  ·  {c['ticker']}")
 col1.caption(f"출처: {src} · 고유번호 {cid.split(':')[1]} · 마지막 수집 {c['fetched_at']} (UTC)")
 
-tab_fin, tab_fil, tab_prof, tab_raw = st.tabs(["재무제표", "공시 목록", "기업 개황", "원본 데이터 다운로드"])
+tab_std, tab_fin, tab_fil, tab_prof, tab_raw = st.tabs(
+    ["표준 재무항목", "재무제표 원본", "공시 목록", "기업 개황", "원본 데이터 다운로드"])
+
+# ---------------- 표준 재무항목 ----------------
+with tab_std:
+    sdf = standard.standardize(cid)
+    if sdf.empty:
+        st.warning("표준화할 재무 데이터가 없습니다.")
+    else:
+        if standard.is_financial(c):
+            st.error("금융업 기업입니다. 매출·매출원가·유동자산 개념이 일반 기업과 달라, 이 표의 항목으로 "
+                     "다른 업종과 비교하면 안 됩니다.")
+        cur = "/".join(sdf["currency"].dropna().unique())
+        ends = sdf.groupby("year")["period_end"].first()
+        st.caption(
+            f"국가·회계기준·회사마다 다른 계정을 **같은 정의의 표준 항목**으로 맞춘 표입니다 (값은 원본 그대로). "
+            f"통화 **{cur}** · 연도 = 회계기간 종료 기준 (종료일: {ends.iloc[0]} … {ends.iloc[-1]})")
+
+        ch = standard.checks(sdf)
+        bad = ch[~ch["ok"]]
+        if bad.empty:
+            st.success(f"검증 {len(ch)}건 모두 통과 (자산=부채+자본, 매출−매출원가=매출총이익 등)")
+        else:
+            st.warning(f"검증 {len(ch)}건 중 {len(bad)}건 확인 필요: 원본 공시의 특수 항목이거나 매핑 오류일 수 있습니다.")
+            st.dataframe(bad.rename(columns={"year": "연도", "check": "검증", "detail": "내용"}).drop(columns="ok"),
+                         hide_index=True)
+
+        w = standard.wide(sdf)
+        scale = st.radio("표시 단위", ["원 단위", "백만", "십억"], horizontal=True, key="std_scale")
+        div = {"원 단위": 1, "백만": 1e6, "십억": 1e9}[scale]
+        per_share = standard.ITEM_BY_KEY["eps_basic"].name
+        shown = w.copy()
+        shown.loc[shown.index != per_share] = shown.loc[shown.index != per_share] / div
+        st.dataframe(shown.style.format("{:,.2f}" if div > 1 else "{:,.0f}", na_rep="—"), width="stretch")
+        st.caption("— = 원본에 없음 (추측해서 채우지 않음). 주당이익은 단위 변환하지 않음.")
+
+        with st.expander("값마다 원본 출처 보기 (원본 계정·태그, 공시번호, 매핑 근거)"):
+            names = {i.key: i.name for i in standard.ITEMS}
+            pick = st.selectbox("항목", list(dict.fromkeys(sdf["item"])), format_func=names.get)
+            st.dataframe(sdf[sdf["item"] == pick][["year", "period_end", "value", "currency", "source", "filing", "method"]],
+                         hide_index=True, width="stretch")
+            st.caption("method: name+code·name·code = 국내 매핑 근거(계정명/표준코드), tag = SEC XBRL 태그, "
+                       "derived = 회계 항등식으로 파생, +abs = 지출 항목 부호를 양수로 통일")
+        with st.expander("국내·해외 비교 시 주의할 회계기준 차이"):
+            for title, body in standard.STANDARD_GAPS:
+                st.markdown(f"**{title}**: {body}")
+            st.markdown("---")
+            for it in standard.ITEMS:
+                if it.note:
+                    st.markdown(f"- **{it.name}**: {it.note}")
 
 # ---------------- 재무제표 ----------------
 with tab_fin:
