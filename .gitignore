@@ -1,0 +1,6 @@
+.env
+.venv/
+__pycache__/
+# 수집 데이터는 기본 제외하되, 배포용 DB 파일은 함께 올린다 (공개 SEC 데이터)
+data/*
+!data/invest.db
