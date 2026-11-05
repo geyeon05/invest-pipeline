@@ -1,24 +1,45 @@
 # invest-pipeline
 
-투자보고서 작성을 위한 데이터 수집 · 저장 · 시각화 파이프라인.
+**기업명만 입력하면** 국내·해외 상장사의 원본 데이터를 공식 공시 시스템에서 자동 수집해 보여주는 도구.
 
-- **수집**: SEC EDGAR (미국) → `data/invest.db` (모든 수치에 공시번호·제출일 출처 기록)
-- **시각화**: Streamlit 대시보드 (`dashboard.py`)
-- **AI 조회**: `query.py` + `CLAUDE.md` 규칙 (AI는 기억이 아니라 DB를 조회해서 답함)
+| | 국내 | 해외 |
+|---|---|---|
+| 출처 | DART (금융감독원 전자공시) | SEC EDGAR (미국 증권거래위원회) |
+| 대상 | 유가증권·코스닥·코넥스 상장사 | 미국 상장사 + SEC 공시 해외기업(ADR) |
+| 재무제표 | 사업보고서 전체 계정 (최근 10년) | XBRL 재무 팩트 전체 (최근 10년) |
+| 공시 | 최근 10년 전체 공시 목록 + 원문 링크 | 최근 10년 전체 공시 목록 + 원문 링크 |
+| 기업정보 | 기업개황 | 업종(SIC), 주소, 회계연도 등 |
 
-## 로컬 실행
+값은 **가공하지 않고** 원천 그대로 저장하며, 행마다 공시 접수번호가 붙어 원문으로 추적할 수 있다.
 
-```bash
-uv sync
-uv run collect.py AAPL MSFT       # 데이터 수집
-uv run streamlit run dashboard.py # 대시보드
+## 구조
+
+```
+dashboard.py          웹 화면 (사람용)
+data.py               명령어 도구 (AI·사람 공용)
+pipeline/
+  registry.py         기업명 → 고유번호 검색 (DART 상장사 목록, SEC 티커 목록)
+  dart.py, sec.py     원천별 수집기
+  service.py          "없으면 수집, 있으면 조회" + 표 배열
+  store.py            SQLite 저장
+data/                 수집 캐시 (git 제외, 언제든 원천에서 다시 받음)
 ```
 
-## 배포 데이터 갱신
+## 실행
 
-배포된 대시보드는 저장소에 포함된 `data/invest.db` 를 읽습니다.
-기업을 추가하거나 데이터를 갱신하려면 로컬에서 `collect.py` 를 실행한 뒤 커밋·푸시하면 자동 반영됩니다.
+```bash
+cp .env.example .env      # DART_API_KEY 입력
+uv sync
+uv run streamlit run dashboard.py
+uv run data.py fin 삼성전자 매출액
+```
 
-## 데이터 출처
+## 배포 (Streamlit Cloud)
 
-미국 증권거래위원회(SEC) EDGAR 공개 데이터. 투자 권유가 아닌 학습·분석 목적.
+앱 설정 → **Secrets** 에 다음을 넣는다:
+
+```toml
+DART_API_KEY = "발급받은 키"
+```
+
+배포 환경의 `data/` 는 앱이 재시작되면 비워지지만, 기업을 다시 검색하면 원천에서 자동으로 다시 수집된다.

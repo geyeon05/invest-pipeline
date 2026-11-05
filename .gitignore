@@ -1,6 +1,5 @@
 .env
 .venv/
 __pycache__/
-# 수집 데이터는 기본 제외하되, 배포용 DB 파일은 함께 올린다 (공개 SEC 데이터)
-data/*
-!data/invest.db
+# 수집 데이터는 캐시: 언제든 원천(DART/SEC)에서 다시 받을 수 있으므로 올리지 않는다
+data/
