@@ -1,6 +1,7 @@
 """표준 재무항목 계층:  원본(raw)  →  표준(standard)  →  (나중에) 지표(ratios)
 
 국가·회계기준·회사마다 다른 계정과목을 '정의가 같은' 표준 항목 하나로 매핑한다.
+이 파일은 매핑 '장치'만 가지고 있고, 항목 정의(ITEMS)는 필요할 때 하나씩 추가한다.
 
 원칙
 1. 값은 바꾸지 않는다. 허용하는 예외는 두 가지뿐이고, 결과에 반드시 표시한다.
@@ -40,96 +41,17 @@ class Item:
 
 PL, BS, CF = ("IS", "CIS"), ("BS",), ("CF",)
 
-ITEMS: list[Item] = [
-    Item("revenue", "매출액", "flow", PL, ("ifrs-full_Revenue",),
-         r"^(매출액|매출|영업수익|수익|수익\(매출액\)|매출액\(영업수익\)|영업수익\(매출액\))$",
-         ("us-gaap:Revenues", "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
-          "us-gaap:SalesRevenueNet", "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax",
-          "ifrs-full:Revenue"),
-         note="국내 플랫폼·서비스 기업은 '영업수익'으로 표시. 금융업은 매출 개념이 달라 비교 부적합."),
-    Item("cost_of_sales", "매출원가", "flow", PL, ("ifrs-full_CostOfSales",), r"^매출원가$",
-         ("us-gaap:CostOfRevenue", "us-gaap:CostOfGoodsAndServicesSold", "us-gaap:CostOfGoodsSold",
-          "ifrs-full:CostOfSales"),
-         sign="abs", note="비용을 성격별로 표시하는 기업(플랫폼 등)은 매출원가가 없다."),
-    Item("gross_profit", "매출총이익", "flow", PL, ("ifrs-full_GrossProfit",), r"^매출총(이익|손익)(\(손실\))?$",
-         ("us-gaap:GrossProfit", "ifrs-full:GrossProfit")),
-    Item("operating_income", "영업이익", "flow", PL, ("dart_OperatingIncomeLoss",),
-         r"^영업(이익|손익|손실)(\(손실\))?$",
-         ("us-gaap:OperatingIncomeLoss", "ifrs-full:ProfitLossFromOperatingActivities"),
-         note="IFRS는 영업이익을 정의하지 않는다. K-IFRS는 표시를 의무화했고, US GAAP은 관행적으로 표시. "
-              "기타영업수익·비용 포함 범위가 회사마다 다를 수 있다."),
-    Item("pretax_income", "법인세차감전순이익", "flow", PL, ("ifrs-full_ProfitLossBeforeTax",),
-         r"^(연결)?법인세(비용)?차감전(계속영업)?(순)?(이익|손익|손실)",
-         ("us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
-          "us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
-          "ifrs-full:ProfitLossBeforeTax")),
-    Item("income_tax", "법인세비용", "flow", PL, ("ifrs-full_IncomeTaxExpenseContinuingOperations",),
-         r"^(계속영업)?법인세(비용|수익|비용\(수익\)|수익\(비용\)|비용\(이익\))?$",
-         ("us-gaap:IncomeTaxExpenseBenefit", "ifrs-full:IncomeTaxExpenseContinuingOperations")),
-    Item("net_income", "당기순이익(연결)", "flow", PL, ("ifrs-full_ProfitLoss",),
-         r"^(연결)?(당기|분기)?순(이익|손익|손실)(\(손실\))?$",
-         ("us-gaap:ProfitLoss", "us-gaap:NetIncomeLoss", "ifrs-full:ProfitLoss"),
-         kr_exclude=r"계속|중단|귀속|지배|포괄",
-         note="비지배지분 몫까지 포함한 연결 순이익. ROE·EPS 에는 '지배주주순이익'을 쓴다."),
-    Item("net_income_parent", "지배주주순이익", "flow", PL, ("ifrs-full_ProfitLossAttributableToOwnersOfParent",),
-         r"(지배기업|지배회사|지배주주).*(소유주|지분|귀속|순이익)",
-         ("us-gaap:NetIncomeLoss", "ifrs-full:ProfitLossAttributableToOwnersOfParent"),
-         kr_exclude=r"비지배|포괄"),
-    Item("eps_basic", "기본주당이익(보통주)", "per_share", PL, ("ifrs-full_BasicEarningsLossPerShare",),
-         r"^(보통주)?기본주당(순)?(이익|손익|손실)",
-         ("us-gaap:EarningsPerShareBasic", "ifrs-full:BasicEarningsLossPerShare"),
-         kr_exclude=r"우선주|계속|중단|희석",
-         note="주식분할 이전 연도의 EPS는 분할이 반영되지 않은 원본값일 수 있다."),
-    Item("total_assets", "자산총계", "stock", BS, ("ifrs-full_Assets",), r"^자산총계$",
-         ("us-gaap:Assets", "ifrs-full:Assets")),
-    Item("current_assets", "유동자산", "stock", BS, ("ifrs-full_CurrentAssets",), r"^유동자산$",
-         ("us-gaap:AssetsCurrent", "ifrs-full:CurrentAssets")),
-    Item("cash", "현금및현금성자산", "stock", BS, ("ifrs-full_CashAndCashEquivalents",), r"^현금및현금성자산$",
-         ("us-gaap:CashAndCashEquivalentsAtCarryingValue", "ifrs-full:CashAndCashEquivalents")),
-    Item("total_liabilities", "부채총계", "stock", BS, ("ifrs-full_Liabilities",), r"^부채총계$",
-         ("us-gaap:Liabilities", "ifrs-full:Liabilities"),
-         note="미국 기업 일부는 부채총계를 따로 보고하지 않는다 → 자산총계 − 자본총계로 파생(derived)."),
-    Item("current_liabilities", "유동부채", "stock", BS, ("ifrs-full_CurrentLiabilities",), r"^유동부채$",
-         ("us-gaap:LiabilitiesCurrent", "ifrs-full:CurrentLiabilities")),
-    Item("equity_total", "자본총계(비지배 포함)", "stock", BS, ("ifrs-full_Equity",), r"^자본총계$",
-         ("us-gaap:StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
-          "us-gaap:StockholdersEquity", "ifrs-full:Equity")),
-    Item("equity_parent", "지배주주지분", "stock", BS, ("ifrs-full_EquityAttributableToOwnersOfParent",),
-         r"(지배기업|지배회사|지배주주).*(소유주|지분)",
-         ("us-gaap:StockholdersEquity", "ifrs-full:EquityAttributableToOwnersOfParent"),
-         kr_exclude=r"비지배"),
-    Item("operating_cf", "영업활동현금흐름", "flow", CF, ("ifrs-full_CashFlowsFromUsedInOperatingActivities",),
-         r"^영업활동(으로인한|으로부터의|에서창출된|으로부터)?(순)?현금(흐름|유입|유출)",
-         ("us-gaap:NetCashProvidedByUsedInOperatingActivities",
-          "us-gaap:NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
-          "ifrs-full:CashFlowsFromUsedInOperatingActivities"),
-         kr_exclude=r"창출된현금$",
-         note="IFRS는 이자·배당의 수취·지급을 영업/투자/재무 중 선택해 분류할 수 있고, US GAAP은 이자 지급을 "
-              "영업활동으로 고정한다. 또 IFRS16 리스는 원금 상환이 재무활동이라 IFRS 기업의 영업현금흐름이 상대적으로 크게 나온다."),
-    Item("investing_cf", "투자활동현금흐름", "flow", CF, ("ifrs-full_CashFlowsFromUsedInInvestingActivities",),
-         r"^투자활동(으로인한|으로부터의|으로부터)?(순)?현금(흐름|유입|유출)",
-         ("us-gaap:NetCashProvidedByUsedInInvestingActivities",
-          "us-gaap:NetCashProvidedByUsedInInvestingActivitiesContinuingOperations",
-          "ifrs-full:CashFlowsFromUsedInInvestingActivities")),
-    Item("financing_cf", "재무활동현금흐름", "flow", CF, ("ifrs-full_CashFlowsFromUsedInFinancingActivities",),
-         r"^재무활동(으로인한|으로부터의|으로부터)?(순)?현금(흐름|유입|유출)",
-         ("us-gaap:NetCashProvidedByUsedInFinancingActivities",
-          "us-gaap:NetCashProvidedByUsedInFinancingActivitiesContinuingOperations",
-          "ifrs-full:CashFlowsFromUsedInFinancingActivities")),
-    Item("capex", "유형자산 취득(설비투자)", "flow", CF,
-         ("ifrs-full_PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
-          "ifrs-full_PurchaseOfPropertyPlantAndEquipment"),
-         r"^유형자산의?취득$",
-         ("us-gaap:PaymentsToAcquirePropertyPlantAndEquipment", "us-gaap:PaymentsToAcquireProductiveAssets",
-          "ifrs-full:PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"),
-         sign="abs", note="지출액을 양수로 통일. 무형자산 취득은 포함하지 않는다."),
-    Item("dividends_paid", "배당금 지급", "flow", CF, ("ifrs-full_DividendsPaidClassifiedAsFinancingActivities",
-                                                     "ifrs-full_DividendsPaid"),
-         r"^(현금)?배당금(의)?지급(액)?$",
-         ("us-gaap:PaymentsOfDividends", "us-gaap:PaymentsOfDividendsCommonStock",
-          "ifrs-full:DividendsPaidClassifiedAsFinancingActivities"),
-         sign="abs", note="지출액을 양수로 통일. 비지배주주 배당 포함 여부는 회사마다 다를 수 있다."),
-]
+# 표준 항목 정의: 비어 있음. 투자기준에서 지표가 필요해질 때 하나씩 정의해 추가한다.
+# 정의는 분석가의 판단이므로, 항목마다 '왜 이렇게 정의했는지'를 note 에 남긴다.
+#
+# 예시 (실제 데이터로 검증했던 매출액 정의):
+#   Item("revenue", "매출액", "flow", PL, ("ifrs-full_Revenue",),
+#        r"^(매출액|매출|영업수익|수익|수익\(매출액\))$",
+#        ("us-gaap:Revenues", "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+#         "us-gaap:SalesRevenueNet", "ifrs-full:Revenue"),
+#        note="국내 플랫폼 기업은 '영업수익'으로 표시"),
+# 이전에 쓰던 21개 정의 전체는 git 기록(커밋 c9af85b)의 이 파일에서 볼 수 있다.
+ITEMS: list[Item] = []
 ITEM_BY_KEY = {i.key: i for i in ITEMS}
 
 # ---------------- 일치 수준 ----------------
@@ -146,23 +68,13 @@ MATCH_LABEL = {"exact": "정의 일치", "proxy": "대체(조건 확인)", "scop
 #   조건 None   : 확인할 방법이 없음 → 항상 scope
 #   처리 drop   : 값을 쓰지 않음(빈칸) / scope: 쓰되 '범위 차이 가능'으로 표시
 US_TAG_RULES: dict[tuple[str, str], tuple[str | None, str, str]] = {
-    ("net_income", "us-gaap:NetIncomeLoss"):
-        ("nci", "drop", "지배주주 몫 순이익. 비지배지분이 있으면 연결 순이익과 달라 사용하지 않음"),
-    ("equity_total", "us-gaap:StockholdersEquity"):
-        ("nci", "drop", "지배주주 몫 자본. 비지배지분이 있으면 자본총계와 달라 사용하지 않음"),
-    ("pretax_income", "us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"):
-        ("equity", "scope", "지분법손익을 제외한 세전이익. 국내 기준(지분법손익 포함)과 지분법손익만큼 다름"),
-    ("capex", "us-gaap:PaymentsToAcquireProductiveAssets"):
-        (None, "scope", "유형자산 외 생산용 자산(내부용 소프트웨어 등)이 포함될 수 있음"),
-    ("dividends_paid", "us-gaap:PaymentsOfDividendsCommonStock"):
-        (None, "scope", "보통주 배당만 포함 (우선주·비지배주주 배당 제외)"),
-    ("operating_cf", "us-gaap:NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"):
-        ("disc", "scope", "계속영업분만 포함 (중단영업 현금흐름 제외)"),
-    ("investing_cf", "us-gaap:NetCashProvidedByUsedInInvestingActivitiesContinuingOperations"):
-        ("disc", "scope", "계속영업분만 포함 (중단영업 현금흐름 제외)"),
-    ("financing_cf", "us-gaap:NetCashProvidedByUsedInFinancingActivitiesContinuingOperations"):
-        ("disc", "scope", "계속영업분만 포함 (중단영업 현금흐름 제외)"),
+    # 예시: ("net_income", "us-gaap:NetIncomeLoss"):
+    #           ("nci", "drop", "지배주주 몫 순이익. 비지배지분이 있으면 연결 순이익과 달라 사용하지 않음"),
 }
+# 항등식 파생: (만들 항목, 항목 A, 항목 B, 설명) → 원본에 없을 때만 A − B 로 계산
+# 예시: ("total_liabilities", "total_assets", "equity_total", "파생: 자산총계 − 자본총계")
+DERIVATIONS: list[tuple[str, str, str, str]] = []
+
 NCI_TAGS = ("us-gaap:MinorityInterest", "us-gaap:NetIncomeLossAttributableToNoncontrollingInterest")
 EQUITY_METHOD_TAGS = ("us-gaap:IncomeLossFromEquityMethodInvestments",)
 DISCONTINUED_TAGS = ("us-gaap:IncomeLossFromDiscontinuedOperationsNetOfTax",
@@ -224,7 +136,7 @@ def _kr(company_id: str) -> pd.DataFrame:
     veto = raw["code"].str.contains(r"Comprehensive|Discontinued|ContinuingOperations|Noncontrolling", na=False) \
         & ~raw["code"].isin(code_map)
     raw.loc[veto, "by_name"] = None
-    raw["by_code"] = [code_map.get(c) if sj in ITEM_BY_KEY.get(code_map.get(c, ""), ITEMS[0]).sj else None
+    raw["by_code"] = [k if (k := code_map.get(c)) and sj in ITEM_BY_KEY[k].sj else None
                       for c, sj in zip(raw["code"], raw["sj_div"])]
     # 이름이 다른 항목을 가리키면 코드는 무시 (코드 오태깅 방지)
     raw["item"] = raw["by_name"].fillna(raw["by_code"].where(raw["by_name"].isna()))
@@ -340,14 +252,22 @@ def _finalize(df: pd.DataFrame) -> pd.DataFrame:
             "match": "derived", "match_note": label})],
             ignore_index=True)
 
-    derive("total_liabilities", "total_assets", "equity_total", "파생: 자산총계 − 자본총계")
-    derive("gross_profit", "revenue", "cost_of_sales", "파생: 매출액 − 매출원가")
+    for target, a, b, label in DERIVATIONS:
+        derive(target, a, b, label)
     order = {it.key: i for i, it in enumerate(ITEMS)}
     return df.sort_values(["year"]).sort_values("item", key=lambda s: s.map(order), kind="stable")
 
 
 def checks(df: pd.DataFrame) -> pd.DataFrame:
-    """매핑 결과 검증. 실패 = 원본 공시가 이상하거나, 매핑이 잘못됐을 가능성."""
+    """매핑 결과 검증. 실패 = 원본 공시가 이상하거나, 매핑이 잘못됐을 가능성.
+    아래 key 로 항목을 정의하면 해당 검증이 자동으로 켜진다 (없으면 건너뜀):
+      total_assets, total_liabilities, equity_total  → 자산 = 부채 + 자본
+      revenue, cost_of_sales, gross_profit           → 매출 − 매출원가 = 매출총이익, 매출 ≥ 매출총이익
+      current_assets, cash                           → 유동자산 ≤ 자산총계, 현금 ≤ 유동자산
+      eps_basic, net_income_parent                   → EPS와 지배순이익 부호 일치
+    """
+    if df.empty:
+        return pd.DataFrame(columns=["year", "check", "ok", "detail"])
     w = df.pivot_table(index="year", columns="item", values="value", aggfunc="first")
     g = lambda k: w[k] if k in w else pd.Series(float("nan"), index=w.index)  # noqa: E731
     rows = []

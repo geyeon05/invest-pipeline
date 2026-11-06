@@ -87,9 +87,11 @@ def main() -> None:
     elif a.cmd == "profile":
         print(json.dumps(c["profile"], ensure_ascii=False, indent=2))
     elif a.cmd == "std":
+        if not standard.ITEMS:
+            sys.exit("아직 정의된 표준 항목이 없습니다. pipeline/standard.py 의 ITEMS 에 필요한 항목을 정의하세요.")
         df = standard.standardize(cid)
         if df.empty:
-            sys.exit("표준화할 재무 데이터가 없습니다.")
+            sys.exit("이 기업에서 정의된 표준 항목에 해당하는 계정을 찾지 못했습니다.")
         if standard.is_financial(c):
             print("[주의] 금융업: 매출·유동자산 등 일반 기업 항목으로 비교하면 안 됩니다.\n")
         cur = "/".join(df["currency"].dropna().unique())
