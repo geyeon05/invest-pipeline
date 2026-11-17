@@ -92,11 +92,16 @@ def unavailable(company_id: str) -> dict:
 
 
 def fetch_missing(company_id: str, progress=print) -> dict:
-    """missing_docs() 목록의 본문을 받는다. 반드시 사용자 승인 후에만 호출한다.
+    """missing_docs() 목록의 본문을 받는다. 반드시 사용자 승인 후에만 호출한다."""
+    return fetch_docs(company_id, missing_docs(company_id), progress)
+
+
+def fetch_docs(company_id: str, docs: list[dict], progress=print) -> dict:
+    """주어진 공시들의 본문을 받는다. 반드시 사용자 승인 후에만 호출한다.
     한 건이 실패해도 멈추지 않고 계속 받는다. DART가 원문을 주지 않는 공시는 기록해 두고 다음부터 다시 요청하지 않는다."""
     done, failed = 0, {}
     skip = unavailable(company_id)
-    for f in missing_docs(company_id):
+    for f in docs:
         if f["rcept_no"] in skip:
             continue
         try:
@@ -254,6 +259,10 @@ class Promise:
     reason: str = ""               # 회사가 적은 미달 사유
     notes: list = field(default_factory=list)
     exception: str | None = None   # 사용자가 인정한 예외 사유
+    # 2단계(B: 조달 자금) 공시 단위 약속에서 쓰는 항목
+    units: list = field(default_factory=list)     # 용도별 결과 (funding.Unit)
+    records: list = field(default_factory=list)   # 판정하지 않고 기록하는 것: 모호한 약속 / 약속 철회
+    tranche: str | None = None
 
 
 def _grade(ratio: float) -> str:
@@ -387,15 +396,21 @@ def verdict(promises: list[Promise], ceos: list[str], attribute: str = "result")
     cur = [p for p in judged if is_current(p)]
     past = [p for p in judged if not is_current(p)]
     fail = lambda ps: [p for p in ps if p.grade == "불이행" and not p.exception]  # noqa: E731
+    # 모호한 약속·약속 철회 기록 (B): 현 대표이사의 기록이면 '주의' 사유
+    cur_records = [r for p in promises if p.records and is_current(p) for r in p.records]
     res = {"current_judged": len(cur), "current_fail": len(fail(cur)), "past_fail": len(fail(past)),
+           "current_records": len(cur_records),
            "pending": sum(p.status == "진행 중" for p in promises),
-           "unresolved": sum(p.status == "확인 필요" for p in promises)}
+           "unresolved": sum(p.status in ("확인 필요", "판단 필요") for p in promises)}
     if len(cur) < 3:
         res["verdict"] = "판정 불가"
         res["why"] = f"현 대표이사의 판정 끝난 약속 {len(cur)}건 (3건 미만)"
         return res
     level = 0 if res["current_fail"] == 0 else (1 if res["current_fail"] == 1 else 2)
     why = [f"현 대표이사 불이행 {res['current_fail']}건"]
+    if cur_records and level == 0:
+        level = 1
+        why.append(f"현 대표이사의 모호한 약속·약속 철회 {len(cur_records)}건 → 주의")
     if res["past_fail"] and level < 2:
         level += 1
         why.append(f"이전 대표이사 시절 불이행 {res['past_fail']}건 → 한 단계 낮춤")

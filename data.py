@@ -28,7 +28,7 @@ import sys
 
 import pandas as pd
 
-from pipeline import documents, promises, service, standard
+from pipeline import documents, funding, promises, service, standard
 
 sys.stdout.reconfigure(encoding="utf-8")
 pd.set_option("display.width", 250)
@@ -191,17 +191,33 @@ def promises_cmd(a) -> None:
     c = resolve_local(a.query, a.pick)
     cid = c["company_id"]
     if not cid.startswith("KR:"):
-        sys.exit("1단계는 한국 기업(자기주식 취득)만 지원합니다. 미국 기업은 3단계에서 추가됩니다.")
-    print(f"\n=== {c['name']} | {cid} | 기준 1: 경영진의 약속 이행 기록 (1단계: 자기주식 취득) ===")
+        sys.exit("한국 기업만 지원합니다 (A: 자기주식 취득, B: 조달 자금 사용). 미국 기업은 3단계에서 추가됩니다.")
+    print(f"\n=== {c['name']} | {cid} | 기준 1: 경영진의 약속 이행 기록 (한국 A·B) ===")
     ceos = promises.current_ceos(cid)
     print(f"현 대표이사 (DART 기업개황, 수집 {c['fetched_at']}): {', '.join(ceos) or '확인 불가'}\n")
 
-    if a.fetch:
-        miss = promises.missing_docs(cid)
-        print(f"[본문 수집] {len(miss)}건을 DART에서 받습니다.")
-        r = promises.fetch_missing(cid)
-        print(f"  → 받음 {r['done']}건, 실패 {len(r['failed'])}건\n")
+    def all_missing():
+        seen, out = set(), []
+        for f in promises.missing_docs(cid) + funding.missing_docs(cid):
+            if f["rcept_no"] not in seen:
+                seen.add(f["rcept_no"])
+                out.append(f)
+        return out
 
+    if a.fetch:
+        # 사업보고서는 약속 공시를 읽어야 필요한 연도를 알 수 있어, 약속 공시를 받은 뒤 한 번 더 확인한다
+        total = {"done": 0, "failed": {}}
+        for _ in range(2):
+            miss = all_missing()
+            if not miss:
+                break
+            print(f"[본문 수집] {len(miss)}건을 DART에서 받습니다.")
+            r = promises.fetch_docs(cid, miss)
+            total["done"] += r["done"]
+            total["failed"].update(r["failed"])
+        print(f"  → 받음 {total['done']}건, 실패 {len(total['failed'])}건\n")
+
+    print("── A. 자기주식 취득 ──")
     ps = promises.evaluate(cid)
     if not ps:
         print("최근 10년간 자기주식 취득 약속(취득결정·신탁계약 체결결정)이 없습니다.")
@@ -217,22 +233,51 @@ def promises_cmd(a) -> None:
         for n in p.notes:
             print(f"         · {n}")
 
-    miss = promises.missing_docs(cid)
+    print("\n── B. 조달 자금 사용 (공시 단위로 셈) ──")
+    evs = funding.evaluate(cid)
+    if not evs:
+        print("최근 10년간 회사 자신의 자금 조달 공시(유상증자·전환/교환/신주인수권부사채 발행결정)가 없습니다.")
+    questions = []
+    for ev in evs:
+        state = ev.status + (f" {ev.grade}" if ev.grade else "")
+        rec = f"  | 기록: {', '.join(dict.fromkeys(ev.records))}" if ev.records else ""
+        print(f"[{ev.kind}{' ' + ev.tranche + '회' if ev.tranche else ''}] 약속 {ev.plan_filed} ({ev.plan_rcept})  "
+              f"대표이사 {'/'.join(ev.ceo_plan) or '?'} → 결과 시점 {'/'.join(ev.ceo_result) or '-'}")
+        print(f"       → {state}{rec}")
+        for n in ev.notes:
+            print(f"         · {n}")
+        for u in ev.units:
+            base = u.plan_amount or u.report_amount
+            ratio = f" {u.ratio:.1%}" if u.ratio is not None else ""
+            print(f"       - {u.cat}: 약속 {_eok(base)} ({u.timing}) / 실제 {_eok(u.actual)}"
+                  f"{' (' + str(u.judged_year) + '년 사업보고서)' if u.judged_year else ''} → {u.status}"
+                  f"{' ' + u.grade if u.grade else ''}{ratio}" + (f" | 차이 사유: {u.reason}" if u.reason else ""))
+            for n in u.notes:
+                print(f"           · {n}")
+            for k, q in u.questions:
+                questions.append((f"{ev.plan_rcept}:{u.cat}", k, q))
+
+    if questions:
+        print(f"\n[직접 판단이 필요한 것 {len(questions)}건] 판단은 criteria/judgments/{cid.replace(':', '_')}.json 에 기록")
+        for i, (key, k, q) in enumerate(questions, 1):
+            print(f"   {i}. [{key}] {q}")
+
+    miss = all_missing()
     if miss:
-        print(f"\n[아직 받지 않은 공시 {len(miss)}건] 판정이 '확인 필요'인 건은 이 본문들이 있어야 판정됩니다.")
+        print(f"\n[아직 받지 않은 공시 {len(miss)}건] '확인 필요'인 건은 이 본문들이 있어야 판정됩니다.")
         for f in miss:
             print(f"   {f['filed']} {f['rcept_no']} {f['title']}")
-        print("   → 받으려면 승인 후: uv run data.py promises <기업> --fetch  (소규모 공시, 건당 수 초)")
+        print("   → 받으려면 승인 후: uv run data.py promises <기업> --fetch")
     unav = promises.unavailable(cid)
     if unav:
         print(f"\n[DART가 원문을 제공하지 않는 공시 {len(unav)}건] 다시 요청하지 않습니다.")
         for r_no, msg in unav.items():
             print(f"   {r_no}  {msg[-60:]}")
 
-    print("\n[회사 판정] (자기주식 취득만 반영한 잠정 판정. 조달 자금(B)은 2단계에서 추가)")
-    v = promises.verdict(ps, ceos, a.attribute)
+    print("\n[회사 판정] (한국 A·B 반영. 미국 기업과 E(사업 전략)는 아직 없음)")
+    v = promises.verdict(ps + evs, ceos, a.attribute)
     label = {"plan": "약속 시점 대표이사 기준", "result": "결과 시점 대표이사 기준"}[a.attribute]
-    print(f"   {v['verdict']}  ({v['why']})  [{label}]  | 진행 중 {v['pending']}건, 확인 필요 {v['unresolved']}건")
+    print(f"   {v['verdict']}  ({v['why']})  [{label}]  | 진행 중 {v['pending']}건, 확인·판단 필요 {v['unresolved']}건")
 
 
 def doc_cmd(cid: str, a) -> None:
