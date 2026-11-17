@@ -172,11 +172,32 @@ def _fetch_kr(company_id: str, f: dict) -> list[dict]:
     d.mkdir(parents=True, exist_ok=True)
     raw_path = d / f"{f['rcept_no']}.zip"
     raw_path.write_bytes(resp.content)
+    return _parse_kr_zip(resp.content, f, raw_path)
+
+
+def _decode_xml(data: bytes) -> str:
+    """XML 선언의 인코딩을 따라 읽는다. 오래된 DART 문서는 EUC-KR 이다.
+    선언이 없거나 틀리면 UTF-8 → CP949(EUC-KR 확장) 순으로 시도."""
+    m = re.match(rb'\s*<\?xml[^>]*encoding=["\']([A-Za-z0-9_\-]+)["\']', data)
+    tried = []
+    for enc in ([m.group(1).decode("ascii")] if m else []) + ["utf-8", "cp949"]:
+        enc = "cp949" if enc.lower() in ("euc-kr", "euckr", "ks_c_5601-1987") else enc
+        if enc in tried:
+            continue
+        tried.append(enc)
+        try:
+            return data.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def _parse_kr_zip(content: bytes, f: dict, raw_path) -> list[dict]:
     parts = []
-    with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
+    with zipfile.ZipFile(io.BytesIO(content)) as z:
         names = sorted(z.namelist(), key=lambda n: (n != f"{f['rcept_no']}.xml", n))  # 본문 먼저, 첨부 뒤
         for i, name in enumerate(names):
-            xml = z.read(name).decode("utf-8", errors="replace")
+            xml = _decode_xml(z.read(name))
             m = re.search(r"<DOCUMENT-NAME[^>]*>([^<]*)</DOCUMENT-NAME>", xml)
             title = m.group(1).strip() if m else (f["title"] if i == 0 else name)
             parts.append({"part": i, "part_name": name, "part_title": title,
@@ -207,13 +228,38 @@ def fetch(company_id: str, rcept_no: str, force: bool = False) -> dict:
     if have and not force:
         return {"collected": False, **f}
     parts = (_fetch_kr if company_id.startswith("KR:") else _fetch_us)(company_id, f)
+    _store(conn, company_id, rcept_no, parts)
+    return {"collected": True, **f, "parts": [(p["part_title"], len(p["text"])) for p in parts]}
+
+
+def rebuild_from_raw(company_id: str, rcept_no: str) -> dict:
+    """보관된 원본 파일에서 텍스트를 다시 만든다 (DART/SEC 요청 없음). 변환 규칙을 고쳤을 때 사용."""
+    conn = connect()
+    conn.executescript(SCHEMA)
+    f = _filing(conn, company_id, rcept_no)
+    row = conn.execute("SELECT raw_path FROM filing_docs WHERE company_id = ? AND rcept_no = ? AND part = 0",
+                       (company_id, rcept_no)).fetchone()
+    if not row:
+        raise ValueError(f"받아 둔 본문이 없습니다: {company_id} {rcept_no}")
+    from pathlib import Path
+    raw_path = Path(row[0])
+    if company_id.startswith("KR:"):
+        parts = _parse_kr_zip(raw_path.read_bytes(), f, raw_path)
+    else:
+        html = raw_path.read_bytes().decode("utf-8", errors="replace")
+        parts = [{"part": 0, "part_name": f["url"].rsplit("/", 1)[-1], "part_title": f["form"] or f["title"],
+                  "source_url": f["url"], "raw_path": str(raw_path), "text": to_text(html, sec=True)}]
+    _store(conn, company_id, rcept_no, parts)
+    return {**f, "parts": [(p["part_title"], len(p["text"])) for p in parts]}
+
+
+def _store(conn, company_id: str, rcept_no: str, parts: list[dict]) -> None:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with conn:
         conn.execute("DELETE FROM filing_docs WHERE company_id = ? AND rcept_no = ?", (company_id, rcept_no))
         conn.executemany("INSERT INTO filing_docs VALUES (?,?,?,?,?,?,?,?,?,?)",
                          [(company_id, rcept_no, p["part"], p["part_name"], p["part_title"], p["source_url"],
                            p["raw_path"], now, len(p["text"]), p["text"]) for p in parts])
-    return {"collected": True, **f, "parts": [(p["part_title"], len(p["text"])) for p in parts]}
 
 
 # ---------------- 조회 ----------------
