@@ -28,7 +28,9 @@ PLAN_KINDS = {"유상증자결정": "유상증자", "전환사채권발행결정
               "신주인수권부사채권발행결정": "신주인수권부사채"}
 CAT_ORDER = ["시설", "영업양수", "운영", "채무상환", "타법인", "기타"]
 FULL_USE = 0.99            # 이 비율 이상 쓰면 "전액 사용"으로 보고 바로 판정
-NO_TIMING_YEARS = 3        # 사용 시기가 없는 약속: 납입 후 3년
+# 사용 시기가 없는 약속: 납입 후 몇 년이 지난 해에 판정할지 (사용자 결정 2026-11-18, 용도별)
+# 영업양수·기타는 '기간 미정' → 사례를 만나면 사용자가 정한다 (판단 기록의 period_years)
+NO_TIMING_YEARS = {"시설": 5, "운영": 1, "채무상환": 1, "타법인": 1}
 WITHDRAW_RX = re.compile(r"만기\s*전\s*상환|만기전상환|소각\s*완료|조기\s*상환|만기\s*전\s*(사채\s*)?취득")
 
 
@@ -297,12 +299,15 @@ def evaluate(company_id: str) -> list:
         for c in sorted(cats, key=CAT_ORDER.index):
             u = Unit(cat=c, plan_amount=pl["amounts"].get(c))
             # 시기
+            years = NO_TIMING_YEARS.get(c) or judg.get(_key(o["rcept_no"], c), {}).get("period_years")
+            start_day = paid or o["filed"]
             if c in pl["end_year"]:
                 u.end_year, u.timing = pl["end_year"][c], f"{pl['end_year'][c]}년까지"
-            elif paid:
-                u.end_year, u.timing = int(paid[:4]) + NO_TIMING_YEARS, f"시기 없음 → 납입({paid}) 후 {NO_TIMING_YEARS}년"
+            elif years:
+                u.end_year = int(start_day[:4]) + int(years)
+                u.timing = f"시기 없음 → {'납입' if paid else '결정일'}({start_day}) 후 {years}년"
             else:
-                u.end_year, u.timing = int(o["filed"][:4]) + NO_TIMING_YEARS, f"시기 없음 → 결정일 후 {NO_TIMING_YEARS}년 (납입일 미확인)"
+                u.end_year, u.timing = None, f"시기 없음 → '{c}' 용도의 기간 미정"
             # 모호한 약속: 대상이 없는 타법인 증권·영업양수 (사용자 결정: 대상이나 시기가 없는 약속)
             if c in ("타법인", "영업양수") and pl["target_known"].get(c) is False:
                 u.status = "모호한 약속"
@@ -314,6 +319,15 @@ def evaluate(company_id: str) -> list:
             if u.status == "모호한 약속":
                 continue
             jk = judg.get(_key(o["rcept_no"], u.cat), {})
+
+            def chosen_base() -> int | None:
+                """약속 금액: 약속 공시와 사업보고서 계획이 다르면 사용자가 고른 쪽 (고르기 전이면 None)."""
+                if u.plan_amount and u.report_amount and abs(u.plan_amount - u.report_amount) > 1_000_000:
+                    b = jk.get("amount_basis")
+                    return None if b is None else (u.plan_amount if b == "plan_doc" else u.report_amount)
+                return u.plan_amount or u.report_amount
+
+            last_seen = None
             for y in sorted(by_year):
                 if y > (u.end_year or 9999):
                     break
@@ -322,11 +336,13 @@ def evaluate(company_id: str) -> list:
                     row = by_year[y][0]
                 if row is None:
                     continue
+                last_seen = y
                 u.report_amount, u.plan_use = row["plan_amt"], row["plan_use"]
                 u.actual, u.act_use, u.reason = row["act_amt"], row["act_use"], row["reason"]
                 u.report_rcept, u.judged_year = reports[y]["rcept_no"], y
                 ev.ceo_result = reports[y]["ceo"]
-                base = u.plan_amount or u.report_amount
+                # 금액 기준을 고르기 전이면, 두 금액 중 작은 쪽으로도 다 썼는지를 본다 (전액 사용 여부 확인용)
+                base = chosen_base() or min(x for x in (u.plan_amount, u.report_amount) if x)
                 if WITHDRAW_RX.search(row["reason"]) and base and u.actual < base * FULL_USE:
                     u.status = "약속 철회"
                     u.notes.append(f"{y}년 사업보고서: \"{row['reason'][:40]}\"")
@@ -335,26 +351,35 @@ def evaluate(company_id: str) -> list:
                     break          # 전액 사용 → 그 해에 판정 (기한 전이어도)
             if u.status == "약속 철회":
                 continue
+            period_q = ("period_years", f"사용 시기가 없는 '{u.cat}' 용도 — 납입 후 몇 년이 지난 해에 판정할까요? (숫자)")
+            amount_q = ("amount_basis", f"약속 공시 {(u.plan_amount or 0)/1e8:,.0f}억 vs 사업보고서 계획 "
+                                        f"{(u.report_amount or 0)/1e8:,.0f}억 — 어느 금액을 약속으로 볼까요? (plan_doc / report)")
             if u.judged_year is None:
-                if (u.end_year or 0) > latest_possible:
+                if u.end_year is None:
+                    u.status, u.questions = "판단 필요", [period_q]
+                elif u.end_year > latest_possible:
                     u.status = "진행 중"
                 else:
                     u.notes.append(f"{u.end_year}년 사업보고서가 필요 (미수집)" if u.end_year not in reports
                                    else "사업보고서 표에서 이 약속의 행을 찾지 못함")
                 continue
-            base = u.plan_amount or u.report_amount
-            done = u.actual >= base * FULL_USE or u.judged_year >= (u.end_year or 0)
-            if not done:
-                u.status = "진행 중" if (u.end_year or 0) > latest_possible else "확인 필요"
-                if u.status == "확인 필요":
-                    u.notes.append(f"{u.end_year}년 사업보고서가 필요 (미수집)")
+            # 약속 금액이 둘이면 어느 쪽인지부터 정해야 '다 썼는지'를 판단할 수 있다
+            base = chosen_base()
+            if base is None:
+                u.status, u.questions = "판단 필요", [amount_q]
+            full = bool(base) and u.actual >= base * FULL_USE
+            if base is not None and u.end_year is None and not full:
+                # 기간 미정이고 아직 다 쓰지 않음 → 기간을 정해야 판정할 수 있다
+                u.status, u.questions = "판단 필요", [period_q]
                 continue
-            # 사용자 판단이 필요한 것
-            if u.plan_amount and u.report_amount and abs(u.plan_amount - u.report_amount) > 1_000_000:
-                if "amount_basis" not in jk:
-                    u.questions.append(("amount_basis", f"약속 공시 {u.plan_amount/1e8:,.0f}억 vs 사업보고서 계획 {u.report_amount/1e8:,.0f}억 — 어느 금액을 약속으로 볼까요? (plan_doc / report)"))
+            if base is not None and not (full or u.judged_year >= u.end_year):
+                if u.end_year > latest_possible:
+                    u.status = "진행 중"
                 else:
-                    base = u.plan_amount if jk["amount_basis"] == "plan_doc" else u.report_amount
+                    u.status = "확인 필요"
+                    u.notes.append(f"{u.end_year}년 사업보고서가 필요 (미수집)" if u.end_year not in reports
+                                   else f"{u.end_year}년 사업보고서 표에 이 약속의 행이 없음 (마지막 확인 {last_seen}년)")
+                continue
             same_text = P._nospace(u.plan_use) == P._nospace(u.act_use)
             if not same_text and not (_cat(u.act_use) == u.cat and u.cat != "기타"):
                 if "same_purpose" not in jk:
@@ -365,6 +390,8 @@ def evaluate(company_id: str) -> list:
             if u.questions:
                 u.status = "판단 필요"
                 continue
+            if jk.get("same_purpose") is True and not same_text:
+                u.notes.append("사용자 판단: 약속과 같은 용도로 인정")
             u.ratio = u.actual / base if base else None
             u.grade = P._grade(u.ratio) if u.ratio is not None else None
             if u.grade == "불이행" and jk.get("grade_override"):
