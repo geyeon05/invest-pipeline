@@ -12,6 +12,23 @@
 
 값은 **가공하지 않고** 원천 그대로 저장하며, 행마다 공시 접수번호가 붙어 원문으로 추적할 수 있다.
 
+## 공시 본문 (요청 시에만)
+
+접수번호를 지정하면 그 공시의 본문을 받는다 (국내 사업보고서 1건 30초~2분, 해외 10-K 약 5초).
+
+- 원본 파일은 그대로 `data/raw/<시장>/<고유번호>/docs/` 에 보관 (DART zip, SEC HTML)
+- DB(`filing_docs`)에는 읽을 수 있는 텍스트로 저장: 장·절 제목은 `#` 줄, 표는 ` | ` 로 칸 구분.
+  내용은 바꾸지 않고, 화면에 보이지 않는 기계용 데이터(DART SUMMARY, SEC 숨김 XBRL)만 제외
+- 국내는 첨부(감사보고서·연결감사보고서)도 별도 문서로 저장
+- 목차: 국내는 DART 장·절 구조, 해외는 `Item 1A. Risk Factors` 같은 Item 제목 (10-K, 10-Q, 20-F)
+
+```bash
+uv run data.py filings 삼성전자 사업보고서                          # 접수번호 확인
+uv run data.py doc 삼성전자 20260310002820                         # 받기 + 목차
+uv run data.py doc 삼성전자 20260310002820 --section 사업의 개요    # 절 읽기
+uv run data.py doc 삼성전자 20260310002820 --grep 자기주식         # 키워드 찾기
+```
+
 ## 국내·해외 비교: 표준 재무항목
 
 국내(K-IFRS, DART 계정)와 해외(US GAAP·IFRS, XBRL 태그)는 계정과목과 회계기준이 달라 원본끼리 바로 비교할 수 없다.
@@ -34,6 +51,8 @@ pipeline/
   registry.py         기업명 → 고유번호 검색 (DART 상장사 목록, SEC 티커 목록)
   dart.py, sec.py     원천별 수집기
   service.py          "없으면 수집, 있으면 조회" + 표 배열
+  documents.py        공시 본문 수집(요청 시) · 텍스트 변환 · 목차/절/검색
+  standard.py         표준 재무항목 매핑 장치 (항목 정의는 필요할 때 추가)
   store.py            SQLite 저장
 data/                 수집 캐시 (git 제외, 언제든 원천에서 다시 받음)
 ```
