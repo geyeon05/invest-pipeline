@@ -16,6 +16,11 @@
   uv run data.py doc 삼성전자 20260310002820 --part 1             # 첨부 문서(감사보고서 등) 선택
   uv run data.py doc 삼성전자 20260310002820 --full               # 전체 텍스트
   uv run data.py docs 삼성전자                                    # 받아 둔 본문 목록
+
+  투자기준 1: 경영진의 약속 이행 기록 (1단계: 한국 자기주식 취득)
+  uv run data.py promises 삼성전자                  # 판정 + 아직 받지 않은 공시 목록 (외부 요청 없음)
+  uv run data.py promises 삼성전자 --fetch          # 위 목록의 본문을 DART에서 받은 뒤 판정 (사용자 승인 후)
+  ※ promises 는 이미 수집된 기업만 대상으로 하고, 기업 재수집·기업목록 갱신을 하지 않는다.
 """
 import argparse
 import json
@@ -23,7 +28,7 @@ import sys
 
 import pandas as pd
 
-from pipeline import documents, service, standard
+from pipeline import documents, promises, service, standard
 
 sys.stdout.reconfigure(encoding="utf-8")
 pd.set_option("display.width", 250)
@@ -59,7 +64,7 @@ def print_candidates(results: list[dict]) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("cmd", choices=["search", "get", "fin", "filings", "profile", "std", "doc", "docs", "list"])
+    p.add_argument("cmd", choices=["search", "get", "fin", "filings", "profile", "std", "doc", "docs", "promises", "list"])
     p.add_argument("query", nargs="?")
     p.add_argument("filter", nargs="?", help="fin: 계정명/태그 일부, filings: 공시명 키워드, doc: 접수번호")
     p.add_argument("--pick", type=int, help="검색 후보 번호")
@@ -69,6 +74,9 @@ def main() -> None:
     p.add_argument("--grep", help="doc: 키워드(정규식)")
     p.add_argument("--part", type=int, default=0, help="doc: 문서 번호 (0=본문, 1~=첨부)")
     p.add_argument("--full", action="store_true", help="doc: 전체 텍스트 출력")
+    p.add_argument("--fetch", action="store_true", help="promises: 아직 받지 않은 공시 본문을 받는다 (사용자 승인 후)")
+    p.add_argument("--attribute", choices=["plan", "result"], default="result",
+                   help="promises: 현 대표이사의 기록을 결과 시점(result, 기본·사용자 결정 2026-11-18)/약속 시점(plan) 대표이사로 볼지")
     a = p.parse_args()
 
     if a.cmd == "list":
@@ -76,6 +84,9 @@ def main() -> None:
         return
     if not a.query:
         p.error("기업명 또는 티커를 입력하세요.")
+    if a.cmd == "promises":
+        promises_cmd(a)
+        return
     if a.cmd == "search":
         results, warnings = service.search(a.query)
         for w in warnings:
@@ -154,6 +165,74 @@ def main() -> None:
                       | t.index.get_level_values("label").str.contains(a.filter, case=False)]
             print(t.to_string())
             print("\n[출처] SEC XBRL companyfacts, 10-K/20-F 연간값. 공시번호(accn)는 raw_financials 에 행마다 기록됨")
+
+
+def resolve_local(query: str, pick: int | None) -> dict:
+    """이미 수집된 기업 중에서만 찾는다 (외부 요청 없음)."""
+    df = service.collected_companies()
+    q = query.replace(" ", "").lower()
+    hit = df[df["company_id"].str.lower().eq(q)
+             | df["ticker"].fillna("").str.replace(" ", "").str.lower().str.split(",").apply(lambda ts: q in ts)
+             | df["name"].str.replace(" ", "").str.lower().str.contains(q, regex=False)]
+    if hit.empty:
+        sys.exit(f"'{query}' 는 아직 수집되지 않은 기업입니다. 기업 수집(DART/SEC 요청)이 먼저 필요합니다.")
+    if len(hit) > 1 and pick is None:
+        for i, r in enumerate(hit.itertuples()):
+            print(f"  [{i}] {r.name} ({r.ticker}) {r.company_id}")
+        sys.exit("후보가 여러 개입니다. --pick 번호 로 선택하세요.")
+    return hit.iloc[pick or 0].to_dict()
+
+
+def _eok(v) -> str:
+    return "-" if v is None else f"{v / 1e8:,.0f}억"
+
+
+def promises_cmd(a) -> None:
+    c = resolve_local(a.query, a.pick)
+    cid = c["company_id"]
+    if not cid.startswith("KR:"):
+        sys.exit("1단계는 한국 기업(자기주식 취득)만 지원합니다. 미국 기업은 3단계에서 추가됩니다.")
+    print(f"\n=== {c['name']} | {cid} | 기준 1: 경영진의 약속 이행 기록 (1단계: 자기주식 취득) ===")
+    ceos = promises.current_ceos(cid)
+    print(f"현 대표이사 (DART 기업개황, 수집 {c['fetched_at']}): {', '.join(ceos) or '확인 불가'}\n")
+
+    if a.fetch:
+        miss = promises.missing_docs(cid)
+        print(f"[본문 수집] {len(miss)}건을 DART에서 받습니다.")
+        r = promises.fetch_missing(cid)
+        print(f"  → 받음 {r['done']}건, 실패 {len(r['failed'])}건\n")
+
+    ps = promises.evaluate(cid)
+    if not ps:
+        print("최근 10년간 자기주식 취득 약속(취득결정·신탁계약 체결결정)이 없습니다.")
+    for p in ps:
+        state = f"{p.grade} ({p.ratio:.1%})" if p.status == "판정" else p.status
+        if p.exception:
+            state += f" → 예외 인정: {p.exception}"
+        print(f"[{p.kind}] 약속 {p.plan_filed} ({p.plan_rcept})  {_eok(p.amount)}  기간 {p.start}~{p.end}  "
+              f"대표이사 {'/'.join(p.ceo_plan) or '?'}")
+        if p.result_rcept:
+            print(f"       결과 {p.result_filed} ({p.result_rcept})  {_eok(p.actual)}  대표이사 {'/'.join(p.ceo_result) or '?'}")
+        print(f"       → {state}" + (f"  | 회사가 적은 미달 사유: {p.reason}" if p.reason else ""))
+        for n in p.notes:
+            print(f"         · {n}")
+
+    miss = promises.missing_docs(cid)
+    if miss:
+        print(f"\n[아직 받지 않은 공시 {len(miss)}건] 판정이 '확인 필요'인 건은 이 본문들이 있어야 판정됩니다.")
+        for f in miss:
+            print(f"   {f['filed']} {f['rcept_no']} {f['title']}")
+        print("   → 받으려면 승인 후: uv run data.py promises <기업> --fetch  (소규모 공시, 건당 수 초)")
+    unav = promises.unavailable(cid)
+    if unav:
+        print(f"\n[DART가 원문을 제공하지 않는 공시 {len(unav)}건] 다시 요청하지 않습니다.")
+        for r_no, msg in unav.items():
+            print(f"   {r_no}  {msg[-60:]}")
+
+    print("\n[회사 판정] (자기주식 취득만 반영한 잠정 판정. 조달 자금(B)은 2단계에서 추가)")
+    v = promises.verdict(ps, ceos, a.attribute)
+    label = {"plan": "약속 시점 대표이사 기준", "result": "결과 시점 대표이사 기준"}[a.attribute]
+    print(f"   {v['verdict']}  ({v['why']})  [{label}]  | 진행 중 {v['pending']}건, 확인 필요 {v['unresolved']}건")
 
 
 def doc_cmd(cid: str, a) -> None:
