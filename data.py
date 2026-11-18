@@ -32,6 +32,10 @@
   투자기준 4: 이익의 질 · 이익조정 신호 (결과만 보여줌, 판정 없음)
   uv run data.py quality 삼성전자                  # 최근 5년 발생액·매출채권·재고·작은 이익·빅 배스 (외부 요청 없음)
   uv run data.py quality 삼성전자 --fetch          # 대표이사 데이터(한국 DART 임원 현황 / 미국 10-K)를 받은 뒤 표시 (승인 후)
+
+  투자기준 5: 재무 안전성 (결과만 보여줌 + 분명한 위험 표시)
+  uv run data.py safety 삼성전자                   # 최근 5년 부채비율·유동비율·당좌비율·이자보상비율·부채/영업CF
+  uv run data.py safety 삼성전자 --fetch           # 한국: 이자비용용 사업보고서 XBRL을 받은 뒤 표시 (승인 후)
 """
 import argparse
 import json
@@ -39,8 +43,8 @@ import sys
 
 import pandas as pd
 
-from pipeline import (cashflow, dart_officers, dart_shares, documents, earnings_quality, funding, promises, returns,
-                      service, standard, us_promises)
+from pipeline import (cashflow, dart_officers, dart_shares, dart_xbrl, documents, earnings_quality, funding, promises,
+                      returns, safety, service, standard, us_promises)
 
 sys.stdout.reconfigure(encoding="utf-8")
 pd.set_option("display.width", 250)
@@ -77,7 +81,7 @@ def print_candidates(results: list[dict]) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("cmd", choices=["search", "get", "fin", "filings", "profile", "std", "doc", "docs", "promises",
-                                   "cashflow", "returns", "quality", "list"])
+                                   "cashflow", "returns", "quality", "safety", "list"])
     p.add_argument("query", nargs="?")
     p.add_argument("filter", nargs="?", help="fin: 계정명/태그 일부, filings: 공시명 키워드, doc: 접수번호")
     p.add_argument("--pick", type=int, help="검색 후보 번호")
@@ -108,6 +112,9 @@ def main() -> None:
         return
     if a.cmd == "quality":
         quality_cmd(a)
+        return
+    if a.cmd == "safety":
+        safety_cmd(a)
         return
     if a.cmd == "search":
         results, warnings = service.search(a.query)
@@ -432,6 +439,46 @@ def quality_cmd(a) -> None:
         for fl in r["flags"]:
             print(f"   · {fl}")
     print("\n   ※ 기준 4는 판정하지 않는다 (결과만 표시). 신호는 의심의 출발점이지 결론이 아니다.")
+
+
+def safety_cmd(a) -> None:
+    """투자기준 5: 재무 안전성 — 결과만 보여주고, 분명한 위험 두 가지만 따로 표시."""
+    c = resolve_local(a.query, a.pick)
+    cid = c["company_id"]
+    if a.fetch and cid.startswith("KR:"):
+        miss = dart_xbrl.missing(cid)
+        print(f"[DART 사업보고서 XBRL] {len(miss)}건을 받습니다.")
+        dart_xbrl.fetch(cid)
+    r = safety.analyze(cid)
+    print(f"\n=== {c['name']} | {cid} | 기준 5: 재무 안전성 (최근 5년, 결과만 표시) ===")
+    if not r["rows"]:
+        print("표시할 결과가 없습니다.")
+    else:
+        pct = lambda v: "-" if v is None else f"{v:.0%}"  # noqa: E731
+        x2 = lambda v: "-" if v is None else f"{v:.2f}"  # noqa: E731
+        yrs = lambda v: "-" if v is None else f"{v:.1f}년"  # noqa: E731
+        print(f"\n{'연도':>5} {'A 부채비율':>10} {'B 유동비율':>10} {'C 당좌비율':>10} {'D 이자보상':>10} {'E 부채/영업CF':>12}")
+        for x in r["rows"]:
+            print(f"{x['year']:>5} {pct(x['debt_ratio']):>10} {pct(x['current']):>10} {pct(x['quick']):>10} "
+                  f"{x2(x['icr']):>10} {yrs(x['debt_ocf']):>12}")
+        print("\n   D 이자보상비율 = 영업이익 ÷ 이자비용 (배수). E = 부채총계를 영업CF로 갚는 데 걸리는 해")
+        print("   ※ 이자비용은 보고 그대로: 한국(국제회계기준)은 리스 이자 포함, 미국은 대부분 미포함")
+        notes = [(x["year"], t) for x in r["rows"] for t in x["notes"]]
+        if notes:
+            print("\n[연도별 표시]")
+            for y, t in notes:
+                print(f"   {y}: {t}")
+    print("\n[분명한 위험] (자본잠식, 이자보상비율 1 미만)")
+    if r["risks"]:
+        for y, t in r["risks"]:
+            print(f"   ● {y}: {t}")
+    else:
+        print("   없음")
+    if r["flags"]:
+        print("\n[회사 단위 표시]")
+        for fl in r["flags"]:
+            print(f"   · {fl}")
+    print("\n   ※ 기준 5는 통과선을 두지 않는다 (업종마다 적정 수준이 다름). 같은 업종끼리 비교해서 본다.")
 
 
 def us_promises_cmd(c: dict, a) -> None:

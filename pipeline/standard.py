@@ -148,6 +148,28 @@ ITEMS: list[Item] = [
          r"^(유동)?재고자산(\(순\))?$",
          ("us-gaap:InventoryNet", "ifrs-full:Inventories", "us-gaap:InventoryNetOfAllowancesCustomerAdvancesAndProgressBillings"),
          kr_exclude=r"비유동|장기"),
+    # ---- 투자기준 5: 재무 안전성 (사용자 결정 2026-11-18) ----
+    Item("total_liabilities", "부채총계", "stock", BS, ("ifrs-full_Liabilities",), r"^부채(총계|합계)$",
+         ("us-gaap:Liabilities", "ifrs-full:Liabilities"),
+         note="부채비율·부채÷영업CF의 분자 (사용자 결정: 수업 공식대로 부채총계). 미국에 태그가 없는 해는 자산총계 − 자본총계(파생)."),
+    Item("equity_total", "자본총계(비지배지분 포함)", "stock", BS, ("ifrs-full_Equity",), r"^자본(총계|합계)$",
+         ("us-gaap:StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest", "us-gaap:StockholdersEquity",
+          "ifrs-full:Equity"),
+         note="부채비율의 분모 (사용자 결정: 연결 부채총계와 범위를 맞춰 비지배지분 포함)."),
+    Item("current_assets", "유동자산", "stock", BS, ("ifrs-full_CurrentAssets",), r"^유동자산(합계|총계)?$",
+         ("us-gaap:AssetsCurrent", "ifrs-full:CurrentAssets")),
+    Item("current_liabilities", "유동부채", "stock", BS, ("ifrs-full_CurrentLiabilities",), r"^유동부채(합계|총계)?$",
+         ("us-gaap:LiabilitiesCurrent", "ifrs-full:CurrentLiabilities")),
+    Item("operating_income", "영업이익", "flow", PL, ("dart_OperatingIncomeLoss", "ifrs-full_ProfitLossFromOperatingActivities"),
+         r"^영업(이익|손실|손익)(\(손실\)|\(이익\))?$",
+         ("us-gaap:OperatingIncomeLoss", "ifrs-full:ProfitLossFromOperatingActivities"),
+         note="회사가 보고한 값 그대로 (사용자 결정). 국제회계기준에는 영업이익 정의가 없어 기타영업손익 처리가 회사마다 다를 수 있다."),
+    Item("interest_expense", "이자비용", "flow", PL, (), r"(?!x)x",
+         ("us-gaap:InterestExpense", "us-gaap:InterestExpenseNonoperating", "us-gaap:InterestAndDebtExpense",
+          "us-gaap:InterestExpenseDebt", "ifrs-full:FinanceCosts"),
+         sign="abs",
+         note="한국은 손익계산서 본문에 없어 사업보고서 XBRL 주석에서 읽는다 (pipeline/dart_xbrl.py). 회사가 보고한 그대로: "
+              "한국(국제회계기준)은 리스부채 이자 포함, 미국은 대부분 미포함 (사용자 결정: 조정하지 않음)."),
     # 미국 주식 수 (한국은 DART '주식의 총수 현황'·'자기주식 취득 및 처분 현황' API 사용: pipeline/dart_shares.py)
     Item("shares_issued", "발행주식 총수(미국)", "shares_stock", BS, (), r"(?!x)x",
          ("us-gaap:CommonStockSharesIssued",), note="자기주식 포함."),
@@ -185,10 +207,18 @@ US_TAG_RULES: dict[tuple[str, str], tuple[str | None, str, str]] = {
         ("nci", "scope", "보통주·우선주 배당 합계일 수 있고, 비지배지분 배당이 섞였을 수 있음"),
     ("inventory", "us-gaap:InventoryNetOfAllowancesCustomerAdvancesAndProgressBillings"):
         (None, "scope", "장기 계약 재고에서 고객 선수금·진행청구액을 뺀 값 (예: Boeing)"),
+    ("equity_total", "us-gaap:StockholdersEquity"):
+        ("nci", "scope", "지배주주 자본만 (비지배지분 제외)"),
+    ("interest_expense", "us-gaap:InterestExpenseDebt"):
+        (None, "scope", "차입금 이자만 (리스 이자 등 제외될 수 있음, 예: Walmart)"),
+    ("interest_expense", "ifrs-full:FinanceCosts"):
+        (None, "scope", "금융원가 전체 (이자 외 항목이 섞일 수 있음, 예: TSMC)"),
 }
 # 항등식 파생: (만들 항목, 항목 A, 항목 B, 설명) → 원본에 없을 때만 A − B 로 계산
 # 예시: ("total_liabilities", "total_assets", "equity_total", "파생: 자산총계 − 자본총계")
-DERIVATIONS: list[tuple[str, str, str, str]] = []
+DERIVATIONS: list[tuple[str, str, str, str]] = [
+    ("total_liabilities", "total_assets", "equity_total", "파생: 자산총계 − 자본총계 (부채총계 태그 없음)"),
+]
 # 대체: (만들 항목, 가져올 항목, 일치 수준, 설명) → 원본에 없는 해에만 다른 항목 값을 그대로 쓴다
 FALLBACKS: list[tuple[str, str, str, str]] = [
     ("receivables", "receivables_broad", "scope", "매출채권 줄이 없어 매출채권및기타채권 사용 (기타채권 포함)"),
@@ -323,6 +353,9 @@ def _kr(company_id: str) -> pd.DataFrame:
         if ("net_income_parent", r.year) not in have and r.year not in nci_years and pd.notna(r.value):
             extra.append({**r._asdict(), "item": "net_income_parent", "method": "derived", "match": "derived",
                           "match_note": "비지배지분이 없어 손익 귀속 구분이 없음 → 연결 순이익 = 지배주주 순이익"})
+    # 이자비용: 손익계산서 본문에 없어 사업보고서 XBRL 주석에서 (투자기준 5)
+    from . import dart_xbrl
+    extra += dart_xbrl.interest_expense(company_id)
     if extra:
         out = pd.concat([out, pd.DataFrame(extra).drop(columns=["Index"], errors="ignore")], ignore_index=True)
     return out
