@@ -28,6 +28,10 @@
   투자기준 3: 주주환원 기록 (결과만 보여줌, 판정 없음)
   uv run data.py returns 삼성전자 [--source]       # 최근 5년 배당·자사주·소각·환원 비율·주식 수 (외부 요청 없음)
   uv run data.py returns 삼성전자 --fetch          # 한국: DART 주식 수 데이터를 받은 뒤 표시 (사용자 승인 후)
+
+  투자기준 4: 이익의 질 · 이익조정 신호 (결과만 보여줌, 판정 없음)
+  uv run data.py quality 삼성전자                  # 최근 5년 발생액·매출채권·재고·작은 이익·빅 배스 (외부 요청 없음)
+  uv run data.py quality 삼성전자 --fetch          # 대표이사 데이터(한국 DART 임원 현황 / 미국 10-K)를 받은 뒤 표시 (승인 후)
 """
 import argparse
 import json
@@ -35,7 +39,8 @@ import sys
 
 import pandas as pd
 
-from pipeline import cashflow, dart_shares, documents, funding, promises, returns, service, standard, us_promises
+from pipeline import (cashflow, dart_officers, dart_shares, documents, earnings_quality, funding, promises, returns,
+                      service, standard, us_promises)
 
 sys.stdout.reconfigure(encoding="utf-8")
 pd.set_option("display.width", 250)
@@ -72,7 +77,7 @@ def print_candidates(results: list[dict]) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("cmd", choices=["search", "get", "fin", "filings", "profile", "std", "doc", "docs", "promises",
-                                   "cashflow", "returns", "list"])
+                                   "cashflow", "returns", "quality", "list"])
     p.add_argument("query", nargs="?")
     p.add_argument("filter", nargs="?", help="fin: 계정명/태그 일부, filings: 공시명 키워드, doc: 접수번호")
     p.add_argument("--pick", type=int, help="검색 후보 번호")
@@ -100,6 +105,9 @@ def main() -> None:
         return
     if a.cmd == "returns":
         returns_cmd(a)
+        return
+    if a.cmd == "quality":
+        quality_cmd(a)
         return
     if a.cmd == "search":
         results, warnings = service.search(a.query)
@@ -380,6 +388,50 @@ def returns_cmd(a) -> None:
         for fl in r["flags"]:
             print(f"   · {fl}")
     print("\n   ※ 기준 3은 판정하지 않는다 (결과만 표시)")
+
+
+def quality_cmd(a) -> None:
+    """투자기준 4: 이익의 질 · 이익조정 신호 — 결과만 보여준다 (판정 없음)."""
+    c = resolve_local(a.query, a.pick)
+    cid = c["company_id"]
+    if a.fetch:
+        r0 = earnings_quality.analyze(cid)
+        ys = [r0["rows"][0]["year"] - 1] + [x["year"] for x in r0["rows"]] if r0["rows"] else []
+        miss = earnings_quality.missing_ceo_data(cid, ys)
+        if miss and cid.startswith("KR:"):
+            print(f"[DART 임원 현황] {len(miss)}건을 받습니다.")
+            dart_officers.fetch(cid, miss)
+        elif miss:
+            print(f"[SEC 10-K 본문] {len(miss)}건을 받습니다.")
+            promises.fetch_docs(cid, miss)
+    r = earnings_quality.analyze(cid)
+    print(f"\n=== {c['name']} | {cid} | 기준 4: 이익의 질 · 이익조정 신호 (최근 5년, 결과만 표시) ===")
+    if not r["rows"]:
+        print("표시할 결과가 없습니다.")
+    else:
+        pct = lambda v: "-" if v is None else f"{v:+.1%}"  # noqa: E731
+        mark = lambda b: "-" if b is None else ("●" if b else "·")  # noqa: E731
+        print("(● 신호 있음, · 없음, - 계산 불가)\n")
+        print(f"{'연도':>5} {'A 발생액/자산':>12} {'매출 증가':>9} {'매출채권':>9} {'B':>2} {'계약자산':>9} {'B*':>2}"
+              f" {'재고':>9} {'C':>2} {'순이익/자산':>10} {'D':>2} {'E':>2}  대표이사")
+        for x in r["rows"]:
+            print(f"{x['year']:>5} {pct(x['accruals']):>12} {pct(x['rev_g']):>9} {pct(x['rec_g']):>9} {mark(x['B']):>2}"
+                  f" {pct(x['ca_g']):>9} {mark(x['B_ca']):>2} {pct(x['inv_g']):>9} {mark(x['C']):>2}"
+                  f" {pct(x['roa']):>10} {mark(x['D']):>2} {mark(x['E']):>2}  {x['ceo'] or '-'}")
+        n = lambda k: sum(1 for x in r["rows"] if x[k])  # noqa: E731
+        print(f"\n[5년 중 신호가 켜진 해] B 매출채권 {n('B')} | 계약자산 {n('B_ca')} | C 재고 {n('C')} | "
+              f"D 작은 이익 {n('D')} | E 빅 배스 {n('E')}")
+        print("   A 발생액/자산이 플러스 = 순이익이 영업CF보다 큼 (현금이 덜 들어온 이익)")
+        notes = [(x["year"], t) for x in r["rows"] for t in x["notes"]]
+        if notes:
+            print("\n[연도별 표시]")
+            for y, t in notes:
+                print(f"   {y}: {t}")
+    if r["flags"]:
+        print("\n[회사 단위 표시]")
+        for fl in r["flags"]:
+            print(f"   · {fl}")
+    print("\n   ※ 기준 4는 판정하지 않는다 (결과만 표시). 신호는 의심의 출발점이지 결론이 아니다.")
 
 
 def us_promises_cmd(c: dict, a) -> None:

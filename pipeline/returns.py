@@ -123,6 +123,7 @@ def analyze(company_id: str, years: int = YEARS) -> dict:
                                                 for k in ("net_income_parent", "dividends_paid", "buyback"))]
     span = base[-years:]
     g = lambda y, k: val.at[y, k] if (k in val and y in val.index and pd.notna(val.at[y, k])) else None  # noqa: E731
+    listed = set(zip(df["item"], df["year"]))   # 줄은 있으나 금액이 빈 경우를 '계정 없음'과 구분
 
     kr = company_id.startswith("KR:")
     comp_by_year, comp_detail = comp_buybacks(company_id) if kr else ({}, [])
@@ -157,9 +158,11 @@ def analyze(company_id: str, years: int = YEARS) -> dict:
         if div_nci:
             row["notes"].append(f"소수주주 배당 {money(div_nci, row['currency'])} 별도 (환원에 넣지 않음)")
         if div is None:
-            row["notes"].append("배당 지급 계정 없음 (배당 없음 또는 계정 미확인)")
+            row["notes"].append("배당 지급 줄은 있으나 금액이 비어 있음" if ("dividends_paid", y) in listed
+                                else "배당 지급 계정 없음 (배당 없음 또는 계정 미확인)")
         if bb is None:
-            row["notes"].append("자사주 매입 계정 없음 (매입 없음 또는 계정 미확인)")
+            row["notes"].append("자사주 매입 줄은 있으나 금액이 비어 있음" if ("buyback", y) in listed
+                                else "자사주 매입 계정 없음 (매입 없음 또는 계정 미확인)")
         if comp:
             row["notes"].append(f"보상 목적 자사주 매입 {money(comp, row['currency'])} 차감 (근거는 아래)")
         if comp and bb is not None and comp > bb:

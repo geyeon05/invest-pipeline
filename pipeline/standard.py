@@ -35,6 +35,7 @@ class Item:
     kr_names: str                  # 공백 제거한 계정명에 대한 정규식
     us_tags: tuple[str, ...]       # "taxonomy:tag" 우선순위
     kr_exclude: str = r"(?!x)x"    # 제외 패턴 (기본: 아무것도 제외 안 함)
+    kr_code_exclude: str = r"(?!x)x"  # 계정코드 제외 패턴 (예: 이름이 같은 비유동 계정을 코드로 가려냄)
     sign: str = "as_is"            # as_is / abs
     note: str = ""
 
@@ -96,7 +97,7 @@ ITEMS: list[Item] = [
     # ---- 투자기준 3: 주주환원 기록 (사용자 결정 2026-11-18) ----
     Item("dividends_paid", "배당금 지급(지배기업 주주)", "flow", CF,
          ("ifrs-full_DividendsPaidClassifiedAsFinancingActivities", "ifrs-full_DividendsPaid"),
-         r"^(현금)?배당금(의)?지급(액)?$",
+         r"^(현금)?배당(금)?(의)?지급(액)?$",   # '배당의 지급'(셀트리온 2016~2025)
          ("us-gaap:PaymentsOfDividendsCommonStock", "us-gaap:PaymentsOfDividends",
           "ifrs-full:DividendsPaidClassifiedAsFinancingActivities"),
          kr_exclude=r"비지배", sign="abs",
@@ -115,6 +116,38 @@ ITEMS: list[Item] = [
          r"(지배기업|지배회사|지배주주).*(소유주|지분|귀속|순이익)",
          ("us-gaap:NetIncomeLoss", "ifrs-full:ProfitLossAttributableToOwnersOfParent"),
          kr_exclude=r"비지배|포괄"),
+    # ---- 투자기준 4: 이익의 질 · 이익조정 신호 (사용자 결정 2026-11-18) ----
+    Item("total_assets", "자산총계", "stock", BS, ("ifrs-full_Assets",), r"^자산(총계|합계)$",
+         ("us-gaap:Assets", "ifrs-full:Assets")),
+    Item("revenue", "매출액", "flow", PL, ("ifrs-full_Revenue",),
+         r"^(매출액|매출|영업수익|수익\(매출액\)|매출액\(영업수익\))$",
+         ("us-gaap:Revenues", "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+          "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax", "us-gaap:SalesRevenueNet", "ifrs-full:Revenue"),
+         note="국내 플랫폼·게임 기업은 '영업수익'으로 표시. 총매출 줄 없이 제품·용역·건설 매출로만 나뉜 해는 합산(파생)."),
+    Item("receivables", "매출채권(유동)", "stock", BS,
+         ("ifrs-full_CurrentTradeReceivables", "dart_ShortTermTradeReceivable", "ifrs-full_TradeReceivables"),
+         r"^(단기)?매출채권(\(순\)|\(순액\))?$",
+         ("us-gaap:AccountsReceivableNetCurrent", "ifrs-full:CurrentTradeReceivables"),
+         kr_exclude=r"장기|비유동", kr_code_exclude=r"(?i)noncurrent|longterm",
+         note="매출채권만 (사용자 결정). 매출채권및기타채권으로만 공시한 해는 그 값을 '범위 차이'로 사용."),
+    Item("receivables_broad", "매출채권및기타채권(유동)", "stock", BS, (),
+         r"^(단기)?매출채권및기타(유동)?(수취)?채권$",
+         ("us-gaap:ReceivablesNetCurrent", "us-gaap:AccountsNotesAndLoansReceivableNetCurrent",
+          "ifrs-full:TradeAndOtherCurrentReceivables"),
+         kr_code_exclude=r"(?i)noncurrent|longterm",
+         note="매출채권 줄이 없는 해의 대체용 (기타채권 포함). 이름이 같은 비유동 계정은 코드로 제외 (네이버)."),
+    Item("contract_assets", "계약자산(미청구공사)", "stock", BS,
+         ("ifrs-full_CurrentContractAssets", "ifrs-full_ContractAssets",
+          "dart_ShortTermDueFromCustomersForContractWork", "dart_ShortTermDueFromCustomersForContractWorkNet"),
+         r"^(유동)?계약자산$|^(단기)?미청구공사(\(순\)|\(순액\))?$",
+         ("us-gaap:ContractWithCustomerAssetNetCurrent", "us-gaap:ContractWithCustomerAssetNet",
+          "us-gaap:UnbilledContractsReceivable", "ifrs-full:CurrentContractAssets"),
+         kr_exclude=r"확정|장기|비유동", kr_code_exclude=r"(?i)noncurrent|longterm",
+         note="공사·건조가 진행된 만큼 매출은 인식했지만 아직 청구하지 않은 금액. 수주산업의 매출채권 성격 (사용자 결정: 별도 표시)."),
+    Item("inventory", "재고자산", "stock", BS, ("ifrs-full_Inventories", "ifrs-full_InventoriesTotal", "ifrs-full_CurrentInventories"),
+         r"^(유동)?재고자산(\(순\))?$",
+         ("us-gaap:InventoryNet", "ifrs-full:Inventories", "us-gaap:InventoryNetOfAllowancesCustomerAdvancesAndProgressBillings"),
+         kr_exclude=r"비유동|장기"),
     # 미국 주식 수 (한국은 DART '주식의 총수 현황'·'자기주식 취득 및 처분 현황' API 사용: pipeline/dart_shares.py)
     Item("shares_issued", "발행주식 총수(미국)", "shares_stock", BS, (), r"(?!x)x",
          ("us-gaap:CommonStockSharesIssued",), note="자기주식 포함."),
@@ -130,8 +163,8 @@ ITEM_BY_KEY = {i.key: i for i in ITEMS}
 # exact   정의 일치      : 표준 항목과 같은 개념의 계정/태그
 # proxy   대체(조건 확인): 정의는 다르지만, 차이를 만드는 요소가 그 해에 없음을 확인했으므로 값이 같다
 # scope   범위 차이 가능 : 정의가 달라 값이 다를 수 있다. 지표 계산 시 주의
-# derived 항등식 파생    : 원본에 없어 회계 항등식으로 계산
-MATCH_LABEL = {"exact": "정의 일치", "proxy": "대체(조건 확인)", "scope": "범위 차이 가능", "derived": "항등식 파생"}
+# derived 파생(계산값)   : 원본에 없어 계산 (항등식, 세부 줄 합산, 같은 값 대체). 계산 방법은 match_note 에
+MATCH_LABEL = {"exact": "정의 일치", "proxy": "대체(조건 확인)", "scope": "범위 차이 가능", "derived": "파생(계산값)"}
 
 # 미국 태그 중 정의가 표준과 다른 것: (항목, 태그) → (조건, 조건 불충족 시 처리, 설명)
 #   조건 nci    : 그 해 비지배지분이 없거나 0  (MinorityInterest, NetIncomeLossAttributableToNoncontrollingInterest)
@@ -150,10 +183,30 @@ US_TAG_RULES: dict[tuple[str, str], tuple[str | None, str, str]] = {
         (None, "scope", "유형자산 외 생산용 자산 처분이 포함될 수 있음"),
     ("dividends_paid", "us-gaap:PaymentsOfDividends"):
         ("nci", "scope", "보통주·우선주 배당 합계일 수 있고, 비지배지분 배당이 섞였을 수 있음"),
+    ("inventory", "us-gaap:InventoryNetOfAllowancesCustomerAdvancesAndProgressBillings"):
+        (None, "scope", "장기 계약 재고에서 고객 선수금·진행청구액을 뺀 값 (예: Boeing)"),
 }
 # 항등식 파생: (만들 항목, 항목 A, 항목 B, 설명) → 원본에 없을 때만 A − B 로 계산
 # 예시: ("total_liabilities", "total_assets", "equity_total", "파생: 자산총계 − 자본총계")
 DERIVATIONS: list[tuple[str, str, str, str]] = []
+# 대체: (만들 항목, 가져올 항목, 일치 수준, 설명) → 원본에 없는 해에만 다른 항목 값을 그대로 쓴다
+FALLBACKS: list[tuple[str, str, str, str]] = [
+    ("receivables", "receivables_broad", "scope", "매출채권 줄이 없어 매출채권및기타채권 사용 (기타채권 포함)"),
+]
+# 국내: 계정명으로 정의 차이가 드러나는 경우 → 범위 차이 표시 (항목, 계정명 정규식, 설명)
+KR_SCOPE_RULES: list[tuple[str, str, str]] = [
+    ("revenue", r"지분법", "매출에 지분법손익이 포함됨 (지주회사, 예: LG '매출 및 지분법 손익')"),
+]
+# 국내: 합계 줄이 없고 세부 줄로만 공시한 해에 세부 줄을 합산 (항목, 재무제표, 계정명 정규식, 계정코드 정규식, 설명)
+#   (실제 사례: 고영 2021년 유형자산 취득을 토지·건물·건설중인자산 등으로만 공시, LG(지주) 매출을 제품·용역·건설로만 공시)
+KR_COMPONENTS: list[tuple[str, tuple[str, ...], str, str, str]] = [
+    ("capex_ppe", CF, r"^(토지|건물|구축물|기계장치|차량운반구|공구와기구|공기구비품|비품|집기|시설장치|건설중인(유형)?자산|기타유형자산)의?(취득|증가)$",
+     r"(?!x)x", "세부 줄 합산: 토지·건물·기계장치·건설중인자산 등의 취득"),
+    ("capex_intangible", CF, r"^(개발비|소프트웨어|산업재산권|회원권|건설중인무형자산|기타무형자산)의?(취득|증가)$",
+     r"(?!x)x", "세부 줄 합산: 개발비·소프트웨어·건설중인무형자산 등의 취득"),
+    ("revenue", PL, r"(?!x)x", r"^ifrs-full_RevenueFrom(SaleOfGoods|RenderingOfServices|ConstructionContracts)$",
+     "세부 줄 합산: 제품·상품 매출 + 용역 매출 + 건설계약 매출"),
+]
 
 NCI_TAGS = ("us-gaap:MinorityInterest", "us-gaap:NetIncomeLossAttributableToNoncontrollingInterest")
 EQUITY_METHOD_TAGS = ("us-gaap:IncomeLossFromEquityMethodInvestments",)
@@ -202,10 +255,11 @@ def _kr(company_id: str) -> pd.DataFrame:
     if raw.empty:
         return pd.DataFrame()
     raw = raw.assign(nm=raw["account_nm"].map(_norm_name), code=raw["account_id"].map(_norm_code))
+    full = raw
 
     def by_name(row) -> str | None:
         for it in ITEMS:
-            if row.sj_div in it.sj and re.search(it.kr_names, row.nm) and not re.search(it.kr_exclude, row.nm):
+            if row.sj_div in it.sj and re.search(it.kr_names, row.nm) and not re.search(it.kr_exclude, row.nm)                     and not re.search(it.kr_code_exclude, row.code):
                 return it.key
         return None
 
@@ -229,16 +283,49 @@ def _kr(company_id: str) -> pd.DataFrame:
 
     company = service.get_company(company_id) or {}
     acc_mt = str((company.get("profile") or {}).get("acc_mt") or "12").zfill(2)  # 결산월
-    period_end = pd.to_datetime(raw["bsns_year"].astype(str) + "-" + acc_mt + "-01") + pd.offsets.MonthEnd(0)
 
-    return pd.DataFrame({
+    def pend(years: pd.Series) -> pd.Series:
+        return (pd.to_datetime(years.astype(str) + "-" + acc_mt + "-01") + pd.offsets.MonthEnd(0)).dt.strftime("%Y-%m-%d")
+
+    out = pd.DataFrame({
         "item": raw["item"], "year": raw["bsns_year"].astype(int),
-        "period_end": period_end.dt.strftime("%Y-%m-%d"),
+        "period_end": pend(raw["bsns_year"]),
         "value": raw["thstrm_amount"], "currency": raw["currency"].fillna("KRW"),
         "source": raw["account_nm"] + "  [" + raw["account_id"].fillna("") + "]  (" + raw["sj_nm"] + ", " + raw["fs_div"] + ")",
         "filing": raw["rcept_no"], "method": raw["method"],
         "match": "exact", "match_note": "",
     })
+    for key, rx, note in KR_SCOPE_RULES:
+        m = (out["item"] == key) & raw["account_nm"].map(_norm_name).str.contains(rx).values
+        out.loc[m, ["match", "match_note"]] = ["scope", note]
+    extra = []
+    have = set(zip(out["item"], out["year"]))
+    # 세부 줄 합산: 합계 줄이 없는 해에만
+    for key, sj, name_rx, code_rx, label in KR_COMPONENTS:
+        it = ITEM_BY_KEY[key]
+        parts = full[full["sj_div"].isin(sj) & (full["nm"].str.match(name_rx) | full["code"].str.match(code_rx))
+                     & full["thstrm_amount"].notna()]
+        for y, g in parts.groupby("bsns_year"):
+            if (key, int(y)) in have:
+                continue
+            g = g.drop_duplicates("nm")
+            vals = g["thstrm_amount"].abs() if it.sign == "abs" else g["thstrm_amount"]
+            extra.append({"item": key, "year": int(y), "period_end": pend(pd.Series([y])).iat[0], "value": vals.sum(),
+                          "currency": g["currency"].fillna("KRW").iat[0],
+                          "source": " + ".join(g["account_nm"]), "filing": g["rcept_no"].iat[0], "method": "derived",
+                          "match": "derived", "match_note": label})
+    # 지배주주 순이익: 귀속 구분 줄이 없고 비지배지분도 없는 해 → 연결 순이익과 같은 값
+    #   (실제 사례: HD현대중공업 2021~2022년은 비지배지분이 없어 손익계산서에 귀속 구분이 없다)
+    pl = full[full["sj_div"].isin(PL)]
+    nci_years = set(pl.loc[pl["nm"].str.contains("비지배") | pl["code"].str.contains("(?i)noncontrolling"), "bsns_year"].astype(int))
+    ni = out[out["item"] == "net_income"]
+    for r in ni.itertuples():
+        if ("net_income_parent", r.year) not in have and r.year not in nci_years and pd.notna(r.value):
+            extra.append({**r._asdict(), "item": "net_income_parent", "method": "derived", "match": "derived",
+                          "match_note": "비지배지분이 없어 손익 귀속 구분이 없음 → 연결 순이익 = 지배주주 순이익"})
+    if extra:
+        out = pd.concat([out, pd.DataFrame(extra).drop(columns=["Index"], errors="ignore")], ignore_index=True)
+    return out
 
 
 # ---------------- 해외 ----------------
@@ -335,6 +422,12 @@ def _finalize(df: pd.DataFrame) -> pd.DataFrame:
 
     for target, a, b, label in DERIVATIONS:
         derive(target, a, b, label)
+    for target, src, match, label in FALLBACKS:
+        have = set(df.loc[(df["item"] == target) & df["value"].notna(), "year"])
+        add = df[(df["item"] == src) & ~df["year"].isin(have) & df["value"].notna()].copy()
+        if not add.empty:
+            add["item"], add["match"], add["match_note"] = target, match, label
+            df = pd.concat([df[~((df["item"] == target) & df["year"].isin(add["year"]))], add], ignore_index=True)
     order = {it.key: i for i, it in enumerate(ITEMS)}
     return df.sort_values(["year"]).sort_values("item", key=lambda s: s.map(order), kind="stable")
 
