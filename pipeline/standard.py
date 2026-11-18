@@ -51,7 +51,49 @@ PL, BS, CF = ("IS", "CIS"), ("BS",), ("CF",)
 #         "us-gaap:SalesRevenueNet", "ifrs-full:Revenue"),
 #        note="국내 플랫폼 기업은 '영업수익'으로 표시"),
 # 이전에 쓰던 21개 정의 전체는 git 기록(커밋 c9af85b)의 이 파일에서 볼 수 있다.
-ITEMS: list[Item] = []
+ITEMS: list[Item] = [
+    # ---- 투자기준 2: 꾸준한 현금 창출 (사용자 결정 2026-11-18) ----
+    Item("operating_cf", "영업활동현금흐름", "flow", CF, ("ifrs-full_CashFlowsFromUsedInOperatingActivities",),
+         r"^영업활동(으로인한|으로부터의|에서창출된|으로부터)?(순)?현금(흐름|유입|유출)",
+         ("us-gaap:NetCashProvidedByUsedInOperatingActivities",
+          "us-gaap:NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
+          "ifrs-full:CashFlowsFromUsedInOperatingActivities"),
+         kr_exclude=r"창출된현금$",
+         note="회사가 보고한 값 그대로 (사용자 결정). 국제회계기준은 리스 원금 상환을 재무활동에, 이자 지급을 영업·재무 중 "
+              "선택해 적을 수 있어 미국 기준보다 크게 나올 수 있다 — 조정하지 않고 표시만 한다."),
+    Item("net_income", "당기순이익(연결)", "flow", PL, ("ifrs-full_ProfitLoss",),
+         r"^(연결)?(당기|분기)?순(이익|손익|손실)(\(손실\))?$",
+         ("us-gaap:ProfitLoss", "us-gaap:NetIncomeLoss", "ifrs-full:ProfitLoss"),
+         kr_exclude=r"계속|중단|귀속|지배|포괄",
+         note="비지배지분 몫까지 포함한 연결 순이익 (사용자 결정: 영업현금흐름과 범위를 맞춤)."),
+    Item("capex_ppe", "유형자산 취득", "flow", CF,
+         ("ifrs-full_PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
+          "ifrs-full_PurchaseOfPropertyPlantAndEquipment"),
+         r"^유형자산의?취득(액)?$",
+         ("us-gaap:PaymentsToAcquirePropertyPlantAndEquipment", "us-gaap:PaymentsToAcquireProductiveAssets",
+          "ifrs-full:PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"),
+         sign="abs", note="지출액을 양수로 통일."),
+    Item("capex_intangible", "무형자산 취득", "flow", CF,
+         ("ifrs-full_PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities", "ifrs-full_PurchaseOfIntangibleAssets"),
+         r"^무형자산의?취득(액)?$",
+         ("us-gaap:PaymentsToAcquireIntangibleAssets",
+          "ifrs-full:PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities"),
+         sign="abs", note="개발비 자산화 등. 국제회계기준 기업은 개발비가 여기로, 미국 기업은 대부분 영업현금흐름에서 이미 빠짐."),
+    Item("disposal_ppe", "유형자산 처분", "flow", CF,
+         ("ifrs-full_ProceedsFromSalesOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
+          "ifrs-full_ProceedsFromSalesOfPropertyPlantAndEquipment"),
+         r"^유형자산의?처분(액)?$",
+         ("us-gaap:ProceedsFromSaleOfPropertyPlantAndEquipment", "us-gaap:ProceedsFromSaleOfProductiveAssets",
+          "ifrs-full:ProceedsFromSalesOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"),
+         sign="abs", note="처분으로 들어온 현금을 양수로 통일."),
+    Item("disposal_intangible", "무형자산 처분", "flow", CF,
+         ("ifrs-full_ProceedsFromSalesOfIntangibleAssetsClassifiedAsInvestingActivities",
+          "ifrs-full_ProceedsFromSalesOfIntangibleAssets"),
+         r"^무형자산의?처분(액)?$",
+         ("us-gaap:ProceedsFromSaleOfIntangibleAssets",
+          "ifrs-full:ProceedsFromSalesOfIntangibleAssetsClassifiedAsInvestingActivities"),
+         sign="abs", note="처분으로 들어온 현금을 양수로 통일."),
+]
 ITEM_BY_KEY = {i.key: i for i in ITEMS}
 
 # ---------------- 일치 수준 ----------------
@@ -68,8 +110,14 @@ MATCH_LABEL = {"exact": "정의 일치", "proxy": "대체(조건 확인)", "scop
 #   조건 None   : 확인할 방법이 없음 → 항상 scope
 #   처리 drop   : 값을 쓰지 않음(빈칸) / scope: 쓰되 '범위 차이 가능'으로 표시
 US_TAG_RULES: dict[tuple[str, str], tuple[str | None, str, str]] = {
-    # 예시: ("net_income", "us-gaap:NetIncomeLoss"):
-    #           ("nci", "drop", "지배주주 몫 순이익. 비지배지분이 있으면 연결 순이익과 달라 사용하지 않음"),
+    ("net_income", "us-gaap:NetIncomeLoss"):
+        ("nci", "drop", "지배주주 몫 순이익. 비지배지분이 있으면 연결 순이익과 달라 사용하지 않음"),
+    ("operating_cf", "us-gaap:NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"):
+        ("disc", "scope", "계속영업분만 포함 (중단영업 현금흐름 제외)"),
+    ("capex_ppe", "us-gaap:PaymentsToAcquireProductiveAssets"):
+        (None, "scope", "유형자산 외 생산용 자산(내부용 소프트웨어 등 무형)이 포함될 수 있음 → 무형자산 취득과 겹칠 수 있음"),
+    ("disposal_ppe", "us-gaap:ProceedsFromSaleOfProductiveAssets"):
+        (None, "scope", "유형자산 외 생산용 자산 처분이 포함될 수 있음"),
 }
 # 항등식 파생: (만들 항목, 항목 A, 항목 B, 설명) → 원본에 없을 때만 A − B 로 계산
 # 예시: ("total_liabilities", "total_assets", "equity_total", "파생: 자산총계 − 자본총계")

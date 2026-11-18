@@ -21,6 +21,9 @@
   uv run data.py promises 삼성전자                  # 판정 + 아직 받지 않은 공시 목록 (외부 요청 없음)
   uv run data.py promises 삼성전자 --fetch          # 위 목록의 본문을 DART에서 받은 뒤 판정 (사용자 승인 후)
   ※ promises 는 이미 수집된 기업만 대상으로 하고, 기업 재수집·기업목록 갱신을 하지 않는다.
+
+  투자기준 2: 꾸준한 현금 창출 (결과만 보여줌, 판정 없음, 외부 요청 없음)
+  uv run data.py cashflow 삼성전자 [--source]      # 최근 5년 영업CF·FCF·현금 전환율 + 표시
 """
 import argparse
 import json
@@ -28,7 +31,7 @@ import sys
 
 import pandas as pd
 
-from pipeline import documents, funding, promises, service, standard, us_promises
+from pipeline import cashflow, documents, funding, promises, service, standard, us_promises
 
 sys.stdout.reconfigure(encoding="utf-8")
 pd.set_option("display.width", 250)
@@ -64,7 +67,8 @@ def print_candidates(results: list[dict]) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("cmd", choices=["search", "get", "fin", "filings", "profile", "std", "doc", "docs", "promises", "list"])
+    p.add_argument("cmd", choices=["search", "get", "fin", "filings", "profile", "std", "doc", "docs", "promises",
+                                   "cashflow", "list"])
     p.add_argument("query", nargs="?")
     p.add_argument("filter", nargs="?", help="fin: 계정명/태그 일부, filings: 공시명 키워드, doc: 접수번호")
     p.add_argument("--pick", type=int, help="검색 후보 번호")
@@ -86,6 +90,9 @@ def main() -> None:
         p.error("기업명 또는 티커를 입력하세요.")
     if a.cmd == "promises":
         promises_cmd(a)
+        return
+    if a.cmd == "cashflow":
+        cashflow_cmd(a)
         return
     if a.cmd == "search":
         results, warnings = service.search(a.query)
@@ -169,8 +176,9 @@ def main() -> None:
 
 def resolve_local(query: str, pick: int | None) -> dict:
     """이미 수집된 기업 중에서만 찾는다 (외부 요청 없음)."""
+    from pipeline.registry import ALIASES, _norm
     df = service.collected_companies()
-    q = query.replace(" ", "").lower()
+    q = _norm(ALIASES.get(_norm(query), query))   # 'TSMC' → 'TSM', '애플' → 'AAPL' 등 흔한 별칭
     hit = df[df["company_id"].str.lower().eq(q)
              | df["ticker"].fillna("").str.replace(" ", "").str.lower().str.split(",").apply(lambda ts: q in ts)
              | df["name"].str.replace(" ", "").str.lower().str.contains(q, regex=False)]
@@ -279,6 +287,44 @@ def promises_cmd(a) -> None:
     v = promises.verdict(ps + evs, ceos, a.attribute)
     label = {"plan": "약속 시점 대표이사 기준", "result": "결과 시점 대표이사 기준"}[a.attribute]
     print(f"   {v['verdict']}  ({v['why']})  [{label}]  | 진행 중 {v['pending']}건, 확인·판단 필요 {v['unresolved']}건")
+
+
+def cashflow_cmd(a) -> None:
+    """투자기준 2: 꾸준한 현금 창출 — 결과만 보여준다 (판정 없음)."""
+    c = resolve_local(a.query, a.pick)
+    r = cashflow.analyze(c["company_id"])
+    print(f"\n=== {c['name']} | {c['company_id']} | 기준 2: 꾸준한 현금 창출 (최근 5년, 결과만 표시) ===")
+    if not r["rows"]:
+        print("표시할 결과가 없습니다.")
+    else:
+        cur = r["rows"][-1]["currency"]
+        unit, div = ("억 원", 1e8) if cur == "KRW" else (f"백만 {cur}", 1e6)
+        f = lambda v: "-" if v is None else f"{v / div:,.0f}"  # noqa: E731
+        print(f"(금액 단위: {unit})\n")
+        print(f"{'연도':>6} {'A 영업CF':>12} {'취득':>10} {'처분':>8} {'순설비투자':>11} {'B FCF':>11} {'연결순이익':>11} {'C 전환율':>8}")
+        for x in r["rows"]:
+            cv = "-" if x["conversion"] is None else f"{x['conversion']:.2f}"
+            print(f"{x['year']:>6} {f(x['operating_cf']):>12} {f(x['acquisitions']):>10} {f(x['disposals']):>8} "
+                  f"{f(x['net_capex']):>11} {f(x['fcf']):>11} {f(x['net_income']):>11} {cv:>8}")
+        k = r["counts"]
+        print(f"\n[5년 중 몇 년] 영업CF > 0: {k['ocf_pos']}/{k['years']}  |  FCF > 0: {k['fcf_pos']}/{k['fcf_known']}"
+              f"  |  현금 전환율 ≥ 1.0: {k['conv_ge1']}/{k['conv_known']} (흑자인 해 기준)")
+        print("   ※ 통과선이 아닌 참고용 개수 (기준 2는 판정하지 않음)")
+        notes = [(x["year"], n) for x in r["rows"] for n in x["notes"]]
+        if notes:
+            print("\n[연도별 표시]")
+            for y, n in notes:
+                print(f"   {y}: {n}")
+    if r["flags"]:
+        print("\n[회사 단위 표시]")
+        for fl in r["flags"]:
+            print(f"   · {fl}")
+    if a.source and not r["sources"].empty:
+        s = r["sources"]
+        ys = [x["year"] for x in r["rows"]]
+        s = s[s["year"].isin(ys)][["item", "year", "value", "match", "source", "filing"]]
+        print("\n[출처]")
+        print(s.to_string(index=False))
 
 
 def us_promises_cmd(c: dict, a) -> None:
