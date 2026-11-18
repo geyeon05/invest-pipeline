@@ -28,7 +28,7 @@ import sys
 
 import pandas as pd
 
-from pipeline import documents, funding, promises, service, standard
+from pipeline import documents, funding, promises, service, standard, us_promises
 
 sys.stdout.reconfigure(encoding="utf-8")
 pd.set_option("display.width", 250)
@@ -190,8 +190,9 @@ def _eok(v) -> str:
 def promises_cmd(a) -> None:
     c = resolve_local(a.query, a.pick)
     cid = c["company_id"]
-    if not cid.startswith("KR:"):
-        sys.exit("한국 기업만 지원합니다 (A: 자기주식 취득, B: 조달 자금 사용). 미국 기업은 3단계에서 추가됩니다.")
+    if cid.startswith("US:"):
+        us_promises_cmd(c, a)
+        return
     print(f"\n=== {c['name']} | {cid} | 기준 1: 경영진의 약속 이행 기록 (한국 A·B) ===")
     ceos = promises.current_ceos(cid)
     print(f"현 대표이사 (DART 기업개황, 수집 {c['fetched_at']}): {', '.join(ceos) or '확인 불가'}\n")
@@ -274,10 +275,53 @@ def promises_cmd(a) -> None:
         for r_no, msg in unav.items():
             print(f"   {r_no}  {msg[-60:]}")
 
-    print("\n[회사 판정] (한국 A·B 반영. 미국 기업과 E(사업 전략)는 아직 없음)")
+    print("\n[회사 판정] (한국 A·B 반영. E(사업 전략)는 아직 없음)")
     v = promises.verdict(ps + evs, ceos, a.attribute)
     label = {"plan": "약속 시점 대표이사 기준", "result": "결과 시점 대표이사 기준"}[a.attribute]
     print(f"   {v['verdict']}  ({v['why']})  [{label}]  | 진행 중 {v['pending']}건, 확인·판단 필요 {v['unresolved']}건")
+
+
+def us_promises_cmd(c: dict, a) -> None:
+    """미국 기업: 10-K의 주주환원 의도 표명 (P1 배당 증액, P2 배당 지속)."""
+    cid = c["company_id"]
+    print(f"\n=== {c['name']} | {cid} | 기준 1: 경영진의 약속 이행 기록 (미국: 10-K 주주환원 의도) ===")
+    if a.fetch:
+        miss = us_promises.missing_docs(cid)
+        print(f"[본문 수집] 10-K {len(miss)}건을 SEC에서 받습니다.")
+        r = promises.fetch_docs(cid, miss)
+        print(f"  → 받음 {r['done']}건, 실패 {len(r['failed'])}건\n")
+    r = us_promises.evaluate(cid)
+    print(f"현 CEO (FY{r['latest_fy']} 10-K 서명): {r['current_ceo'] or '확인 불가'}")
+    ceos_seen = list(dict.fromkeys(v for v in r["ceo_by_fy"].values() if v))
+    print(f"10-K 서명 CEO: " + ", ".join(f"{n} (FY{min(y for y, v in r['ceo_by_fy'].items() if v == n)}~"
+                                          f"{max(y for y, v in r['ceo_by_fy'].items() if v == n)})" for n in ceos_seen) + "\n")
+    if not r["promises"]:
+        print("자동 판정 대상인 주주환원 의도 문장(P1 배당 증액, P2 배당 지속)이 10-K에 없습니다.")
+    for p in r["promises"]:
+        state = p.status + (f" {p.grade}" if p.grade else "")
+        print(f"[{p.kind}] CEO {p.result_filed} 시기 → {state}")
+        for n in p.notes:
+            print(f"       · {n}")
+        for ck in p.units:
+            print(f"       - FY{ck['fy']}: {ck['result']}  ({ck['detail']})")
+    if r["references"]:
+        print(f"\n[확인해볼 문장 {len(r['references'])}건] 자동 판정하지 않음 (P3 금액 있는 배당 예정, 설비투자 계획, 일반 문장 등)")
+        for x in r["references"][:12]:
+            yrs = f"FY{x['years'][0]}" + (f"~FY{x['years'][-1]}" if x['years'][-1] != x['years'][0] else "")
+            print(f"   {yrs} ({len(x['years'])}회) {x['text'][:170]}")
+        if len(r["references"]) > 12:
+            print(f"   … 외 {len(r['references']) - 12}건")
+    miss = us_promises.missing_docs(cid)
+    if miss:
+        print(f"\n[아직 받지 않은 10-K {len(miss)}건]")
+        for f in miss:
+            print(f"   {f['filed']} {f['rcept_no']} {f['title']}")
+        print("   → 받으려면 승인 후: uv run data.py promises <기업> --fetch")
+    print("\n[회사 판정] (현 CEO 재임 기간으로 판정, 이전 CEO 시절 불이행은 한 단계 낮춤)")
+    cur = [us_promises._norm_person(r["current_ceo"] or "")]
+    v = promises.verdict(r["promises"], cur, "result")
+    print(f"   {v['verdict']}  ({v['why']})  | 진행 중 {v['pending']}건, 확인 필요 {v['unresolved']}건")
+    print("   ※ 미국 기업은 같은 의도 문장을 약속 1건으로 세므로 대부분 '판정 불가'가 된다 (기준 문서 7. 미국 기업)")
 
 
 def doc_cmd(cid: str, a) -> None:
