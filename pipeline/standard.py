@@ -29,7 +29,7 @@ from . import service
 class Item:
     key: str
     name: str
-    kind: str                      # flow(기간) / stock(시점) / per_share
+    kind: str                      # flow(기간) / stock(시점) / per_share / shares(기간 주식 수) / shares_stock(시점 주식 수)
     sj: tuple[str, ...]            # DART 재무제표 구분
     kr_codes: tuple[str, ...]
     kr_names: str                  # 공백 제거한 계정명에 대한 정규식
@@ -93,6 +93,36 @@ ITEMS: list[Item] = [
          ("us-gaap:ProceedsFromSaleOfIntangibleAssets",
           "ifrs-full:ProceedsFromSalesOfIntangibleAssetsClassifiedAsInvestingActivities"),
          sign="abs", note="처분으로 들어온 현금을 양수로 통일."),
+    # ---- 투자기준 3: 주주환원 기록 (사용자 결정 2026-11-18) ----
+    Item("dividends_paid", "배당금 지급(지배기업 주주)", "flow", CF,
+         ("ifrs-full_DividendsPaidClassifiedAsFinancingActivities", "ifrs-full_DividendsPaid"),
+         r"^(현금)?배당금(의)?지급(액)?$",
+         ("us-gaap:PaymentsOfDividendsCommonStock", "us-gaap:PaymentsOfDividends",
+          "ifrs-full:DividendsPaidClassifiedAsFinancingActivities"),
+         kr_exclude=r"비지배", sign="abs",
+         note="지배기업이 자기 주주에게 지급한 배당. 소수주주 배당이 별도 줄로 있으면 이 줄은 지배기업 몫으로 보고, "
+              "한 줄뿐이면 소수주주 몫이 섞였을 수 있어 '구분 불가'로 표시."),
+    Item("dividends_paid_nci", "비지배지분(소수주주) 배당 지급", "flow", CF, (),
+         r"비지배(지분|주주).*배당|배당.*비지배", ("us-gaap:PaymentsOfDividendsMinorityInterest",),
+         sign="abs", note="자회사가 소수주주에게 준 배당. 주주환원에 넣지 않고 표시만."),
+    Item("buyback", "자기주식 취득(현금흐름표)", "flow", CF,
+         ("ifrs-full_PurchaseOfTreasuryShares", "dart_AcquisitionOfTreasuryShares",
+          "ifrs-full_PaymentsToAcquireOrRedeemEntitysShares"),
+         r"^자기주식의?(취득|매입)(액)?$",
+         ("us-gaap:PaymentsForRepurchaseOfCommonStock", "ifrs-full:PaymentsToAcquireOrRedeemEntitysShares"),
+         sign="abs", note="현금흐름표의 자사주 매입액. 임직원 보상 목적 매입 차감은 pipeline/returns.py 에서 한다."),
+    Item("net_income_parent", "지배주주순이익", "flow", PL, ("ifrs-full_ProfitLossAttributableToOwnersOfParent",),
+         r"(지배기업|지배회사|지배주주).*(소유주|지분|귀속|순이익)",
+         ("us-gaap:NetIncomeLoss", "ifrs-full:ProfitLossAttributableToOwnersOfParent"),
+         kr_exclude=r"비지배|포괄"),
+    # 미국 주식 수 (한국은 DART '주식의 총수 현황'·'자기주식 취득 및 처분 현황' API 사용: pipeline/dart_shares.py)
+    Item("shares_issued", "발행주식 총수(미국)", "shares_stock", BS, (), r"(?!x)x",
+         ("us-gaap:CommonStockSharesIssued",), note="자기주식 포함."),
+    Item("shares_outstanding", "유통주식 수(미국)", "shares_stock", BS, (), r"(?!x)x",
+         ("us-gaap:CommonStockSharesOutstanding",), note="자기주식 제외."),
+    Item("shares_retired", "소각 주식 수(미국)", "shares", CF, (), r"(?!x)x",
+         ("us-gaap:StockRepurchasedAndRetiredDuringPeriodShares", "us-gaap:TreasuryStockSharesRetired"),
+         note="매입 즉시 소각하거나 자기주식을 소각한 수량."),
 ]
 ITEM_BY_KEY = {i.key: i for i in ITEMS}
 
@@ -118,6 +148,8 @@ US_TAG_RULES: dict[tuple[str, str], tuple[str | None, str, str]] = {
         (None, "scope", "유형자산 외 생산용 자산(내부용 소프트웨어 등 무형)이 포함될 수 있음 → 무형자산 취득과 겹칠 수 있음"),
     ("disposal_ppe", "us-gaap:ProceedsFromSaleOfProductiveAssets"):
         (None, "scope", "유형자산 외 생산용 자산 처분이 포함될 수 있음"),
+    ("dividends_paid", "us-gaap:PaymentsOfDividends"):
+        ("nci", "scope", "보통주·우선주 배당 합계일 수 있고, 비지배지분 배당이 섞였을 수 있음"),
 }
 # 항등식 파생: (만들 항목, 항목 A, 항목 B, 설명) → 원본에 없을 때만 A − B 로 계산
 # 예시: ("total_liabilities", "total_assets", "equity_total", "파생: 자산총계 − 자본총계")
@@ -245,7 +277,8 @@ def _us(company_id: str) -> pd.DataFrame:
         cands = df[df["full_tag"].isin(it.us_tags)].copy()
         if cands.empty:
             continue
-        cands = cands[cands["unit"] == (f"{currency}/shares" if it.kind == "per_share" else currency)]
+        want = {"per_share": f"{currency}/shares", "shares": "shares", "shares_stock": "shares"}.get(it.kind, currency)
+        cands = cands[cands["unit"] == want]
         cands["year"] = cands["year"].astype(int)
         cands["match"], cands["match_note"] = "exact", ""
         keep = pd.Series(True, index=cands.index)

@@ -24,6 +24,10 @@
 
   투자기준 2: 꾸준한 현금 창출 (결과만 보여줌, 판정 없음, 외부 요청 없음)
   uv run data.py cashflow 삼성전자 [--source]      # 최근 5년 영업CF·FCF·현금 전환율 + 표시
+
+  투자기준 3: 주주환원 기록 (결과만 보여줌, 판정 없음)
+  uv run data.py returns 삼성전자 [--source]       # 최근 5년 배당·자사주·소각·환원 비율·주식 수 (외부 요청 없음)
+  uv run data.py returns 삼성전자 --fetch          # 한국: DART 주식 수 데이터를 받은 뒤 표시 (사용자 승인 후)
 """
 import argparse
 import json
@@ -31,7 +35,7 @@ import sys
 
 import pandas as pd
 
-from pipeline import cashflow, documents, funding, promises, service, standard, us_promises
+from pipeline import cashflow, dart_shares, documents, funding, promises, returns, service, standard, us_promises
 
 sys.stdout.reconfigure(encoding="utf-8")
 pd.set_option("display.width", 250)
@@ -68,7 +72,7 @@ def print_candidates(results: list[dict]) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("cmd", choices=["search", "get", "fin", "filings", "profile", "std", "doc", "docs", "promises",
-                                   "cashflow", "list"])
+                                   "cashflow", "returns", "list"])
     p.add_argument("query", nargs="?")
     p.add_argument("filter", nargs="?", help="fin: 계정명/태그 일부, filings: 공시명 키워드, doc: 접수번호")
     p.add_argument("--pick", type=int, help="검색 후보 번호")
@@ -93,6 +97,9 @@ def main() -> None:
         return
     if a.cmd == "cashflow":
         cashflow_cmd(a)
+        return
+    if a.cmd == "returns":
+        returns_cmd(a)
         return
     if a.cmd == "search":
         results, warnings = service.search(a.query)
@@ -325,6 +332,54 @@ def cashflow_cmd(a) -> None:
         s = s[s["year"].isin(ys)][["item", "year", "value", "match", "source", "filing"]]
         print("\n[출처]")
         print(s.to_string(index=False))
+
+
+def returns_cmd(a) -> None:
+    """투자기준 3: 주주환원 기록 — 결과만 보여준다 (판정 없음)."""
+    c = resolve_local(a.query, a.pick)
+    cid = c["company_id"]
+    if a.fetch and cid.startswith("KR:"):
+        ys = dart_shares.target_years()
+        print(f"[DART 주식 수 데이터] {len(dart_shares.missing(cid, ys))}건을 받습니다.")
+        dart_shares.fetch(cid, ys)
+    r = returns.analyze(cid)
+    print(f"\n=== {c['name']} | {cid} | 기준 3: 주주환원 기록 (최근 5년, 결과만 표시) ===")
+    if r["rows"]:
+        cur = r["rows"][-1]["currency"] or ("KRW" if cid.startswith("KR:") else "USD")
+        unit, div = ("억 원", 1e8) if cur == "KRW" else (f"백만 {cur}", 1e6)
+        f = lambda v: "-" if v is None else f"{v / div:,.0f}"  # noqa: E731
+        print(f"(금액 단위: {unit}, 주식 수: 주)\n")
+        print(f"{'연도':>5} {'A 배당':>9} {'자사주매입':>10} {'보상차감':>9} {'B 매입(순)':>10} {'지배순이익':>10} {'D 환원비율':>9}"
+              f" {'C 소각':>13} {'E 발행주식':>15} {'E 유통주식':>15}")
+        sh = lambda v: "-" if v is None else f"{v:,.0f}"  # noqa: E731
+        for x in r["rows"]:
+            rt = "-" if x["ratio"] is None else f"{x['ratio']:.0%}"
+            print(f"{x['year']:>5} {f(x['dividends']):>9} {f(x['buyback']):>10} {f(x['comp'] or None):>9} "
+                  f"{f(x['buyback_net']):>10} {f(x['net_income_parent']):>10} {rt:>9} {sh(x['retired']):>13} "
+                  f"{sh(x['issued']):>15} {sh(x['outstanding']):>15}")
+        first = next((x for x in r["rows"] if x["issued"] is not None), None)
+        last = next((x for x in reversed(r["rows"]) if x["issued"] is not None), None)
+        if first and last and first is not last:
+            ch = lambda k: (f"{(last[k] / first[k] - 1):+.1%}" if first.get(k) and last.get(k) else "-")  # noqa: E731
+            print(f"\n[주식 수 변화 {first['year']}→{last['year']}] 발행주식 {ch('issued')}  |  유통주식 {ch('outstanding')}")
+        notes = [(x["year"], n) for x in r["rows"] for n in x["notes"]]
+        if notes:
+            print("\n[연도별 표시]")
+            for y, n in notes:
+                print(f"   {y}: {n}")
+    else:
+        print("표시할 결과가 없습니다.")
+    if r["comp_detail"]:
+        print("\n[보상 목적 자사주 매입의 근거 (취득결정 공시)]")
+        for d in r["comp_detail"]:
+            yrs = ", ".join(f"{y}년 {v / 1e8:,.0f}억" for y, v in sorted(d.get("years", {}).items()))
+            print(f"   {d['filed']} {d['plan']} | 목적: {d.get('purpose', '-')} | {d.get('basis', d.get('note', ''))}"
+                  + (f" | {yrs}" if yrs else ""))
+    if r["flags"]:
+        print("\n[회사 단위 표시]")
+        for fl in r["flags"]:
+            print(f"   · {fl}")
+    print("\n   ※ 기준 3은 판정하지 않는다 (결과만 표시)")
 
 
 def us_promises_cmd(c: dict, a) -> None:
