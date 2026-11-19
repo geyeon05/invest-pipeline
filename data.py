@@ -47,8 +47,8 @@ import sys
 
 import pandas as pd
 
-from pipeline import (cashflow, dart_officers, dart_shares, dart_xbrl, documents, earnings_quality, funding, price_level,
-                      prices, promises, returns, safety, service, standard, us_promises)
+from pipeline import (capital_allocation, cashflow, dart_officers, dart_shares, dart_xbrl, documents, earnings_quality,
+                      funding, price_level, prices, promises, returns, safety, service, standard, us_promises)
 
 sys.stdout.reconfigure(encoding="utf-8")
 pd.set_option("display.width", 250)
@@ -85,7 +85,7 @@ def print_candidates(results: list[dict]) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("cmd", choices=["search", "get", "fin", "filings", "profile", "std", "doc", "docs", "promises",
-                                   "cashflow", "returns", "quality", "safety", "price", "list"])
+                                   "cashflow", "returns", "quality", "safety", "price", "allocation", "list"])
     p.add_argument("query", nargs="?")
     p.add_argument("filter", nargs="?", help="fin: 계정명/태그 일부, filings: 공시명 키워드, doc: 접수번호")
     p.add_argument("--pick", type=int, help="검색 후보 번호")
@@ -123,6 +123,9 @@ def main() -> None:
         return
     if a.cmd == "price":
         price_cmd(a)
+        return
+    if a.cmd == "allocation":
+        allocation_cmd(a)
         return
     if a.cmd == "search":
         results, warnings = service.search(a.query)
@@ -493,6 +496,64 @@ def safety_cmd(a) -> None:
         for fl in r["flags"]:
             print(f"   · {fl}")
     print("\n   ※ 기준 5는 통과선을 두지 않는다 (업종마다 적정 수준이 다름). 같은 업종끼리 비교해서 본다.")
+
+
+def allocation_cmd(a) -> None:
+    """자본 배분: 번 돈을 어디에 썼고 결과가 어땠나 (기준 3 주주환원을 합친 분석 도구, 판정 없음)."""
+    c = resolve_local(a.query, a.pick)
+    cid = c["company_id"]
+    r = capital_allocation.analyze(cid)
+    print(f"\n=== {c['name']} | {cid} | 자본 배분 (최근 5년, 결과만 표시) ===")
+    rows = r["rows"]
+    if not rows:
+        print("표시할 결과가 없습니다.")
+        return
+    cur = rows[-1]["currency"] or ("KRW" if cid.startswith("KR:") else "USD")
+    unit, dv = ("억 원", 1e8) if cur == "KRW" else (f"백만 {cur}", 1e6)
+    f = lambda v: "-" if v is None else f"{v / dv:,.0f}"  # noqa: E731
+    pc = lambda v: "-" if v is None else f"{v:+.0%}"  # noqa: E731
+    print(f"(단위: {unit})\n")
+    print(f"{'연도':>5} {'번 돈(영업CF)':>13} {'설비 재투자':>10} {'FCF':>9} {'주주환원':>9} {'FCF−환원':>9} "
+          f"{'이자부부채 증감':>13} {'ROE':>6}")
+    for x in rows:
+        roe = "-" if x["roe"] is None else f"{x['roe']:.1%}"
+        print(f"{x['year']:>5} {f(x['ocf']):>13} {f(x['capex']):>10} {f(x['fcf']):>9} {f(x['payout']):>9} "
+              f"{f(x['left']):>9} {f(x['debt_change']):>13} {roe:>6}")
+    print("   주주환원 = 배당 + 자사주 매입(임직원 보상 목적 제외). 자세한 내역: uv run data.py returns <기업>")
+    print("   ROE = 연결 순이익 ÷ 평균 자본총계. 재투자는 설비만 (인수·지분 투자 제외)")
+
+    fa = r["facts"]
+    print("\n[의도를 논의할 때 쓸 사실]")
+    pe = fa["persistence"]
+    print(f" ① 환원이 이어진 해: {pe['n']}/{pe['of']}년  (배당 {pe['div_years'] or '없음'}, 자사주 매입 {pe['buy_years'] or '없음'})")
+    if fa["over_fcf"]:
+        print(" ② 환원이 FCF보다 큰 해:")
+        for y, p, fc, dc in fa["over_fcf"]:
+            print(f"     {y}: 환원 {f(p)} > FCF {f(fc)}  | 이자부 부채 증감 {f(dc)}")
+    else:
+        print(" ② 환원이 FCF보다 큰 해: 없음")
+    print(" ③ 자사주: 연도 | 취득 주식 | 소각 주식 | 처분 주식 | 연말 보유")
+    num = lambda v: "-" if v is None else f"{v:,.0f}"  # noqa: E731
+    for y, acq, ret_, dis, tr in fa["retire"]:
+        print(f"     {y} | {num(acq)} | {num(ret_)} | {num(dis)} | {num(tr)}")
+    if fa["timing"]:
+        lab = "매입 결정 전 6개월 주가 변화" if cid.startswith("KR:") else "매입한 회계연도의 1년 주가 변화"
+        print(f" ④ 매입 시점의 주가 흐름 ({lab}):")
+        for t in fa["timing"]:
+            tag = f" [보상 목적: {t['comp']}]" if t.get("comp") else ""
+            amt = "" if not t.get("amount") else f" {f(t['amount'])}"
+            print(f"     {t['date']} {t['kind']}{amt}: {pc(t['change'])}{tag}")
+    else:
+        print(" ④ 매입 시점의 주가 흐름: 해당 없음")
+    pr = fa.get("promise", {})
+    gr = ", ".join(f"{k} {v}건" for k, v in pr.get("grades", {}).items())
+    print(f" ⑤ 발표한 환원 정책을 지켰나 (기준 1, {pr.get('scope')}): {pr.get('verdict')} ({pr.get('why')})"
+          + (f" | {gr}" if gr else ""))
+    if r["flags"]:
+        print("\n[회사 단위 표시]")
+        for fl in r["flags"]:
+            print(f"   · {fl}")
+    print("\n   ※ 판정하지 않는다. 주주환원의 의도는 회사마다 논의해서 판단한다 (프로필 4-2).")
 
 
 def price_cmd(a) -> None:
