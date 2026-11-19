@@ -9,6 +9,7 @@ dependencies = [
     "streamlit>=1.38",
     "plotly>=5.22",
     "python-dotenv>=1.0",
+    "yfinance>=1.8.0",
 ]
 
 [tool.uv]

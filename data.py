@@ -36,6 +36,10 @@
   투자기준 5: 재무 안전성 (결과만 보여줌 + 분명한 위험 표시)
   uv run data.py safety 삼성전자                   # 최근 5년 부채비율·유동비율·당좌비율·이자보상비율·부채/영업CF
   uv run data.py safety 삼성전자 --fetch           # 한국: 이자비용용 사업보고서 XBRL을 받은 뒤 표시 (승인 후)
+
+  잠정 가격 판단: PER·PBR (판정 없음, 13~14주차 내재가치 계산 전까지의 비교 기준)
+  uv run data.py price 삼성전자 --peers SK하이닉스   # 최근 5년·현재 PER(그해 이익/5년 평균)·PBR + 경쟁사 비교
+  uv run data.py price 삼성전자 --fetch            # 주가(Yahoo Finance)·한국 주식 수(DART)를 받은 뒤 표시 (승인 후)
 """
 import argparse
 import json
@@ -43,8 +47,8 @@ import sys
 
 import pandas as pd
 
-from pipeline import (cashflow, dart_officers, dart_shares, dart_xbrl, documents, earnings_quality, funding, promises,
-                      returns, safety, service, standard, us_promises)
+from pipeline import (cashflow, dart_officers, dart_shares, dart_xbrl, documents, earnings_quality, funding, price_level,
+                      prices, promises, returns, safety, service, standard, us_promises)
 
 sys.stdout.reconfigure(encoding="utf-8")
 pd.set_option("display.width", 250)
@@ -81,7 +85,7 @@ def print_candidates(results: list[dict]) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("cmd", choices=["search", "get", "fin", "filings", "profile", "std", "doc", "docs", "promises",
-                                   "cashflow", "returns", "quality", "safety", "list"])
+                                   "cashflow", "returns", "quality", "safety", "price", "list"])
     p.add_argument("query", nargs="?")
     p.add_argument("filter", nargs="?", help="fin: 계정명/태그 일부, filings: 공시명 키워드, doc: 접수번호")
     p.add_argument("--pick", type=int, help="검색 후보 번호")
@@ -92,6 +96,7 @@ def main() -> None:
     p.add_argument("--part", type=int, default=0, help="doc: 문서 번호 (0=본문, 1~=첨부)")
     p.add_argument("--full", action="store_true", help="doc: 전체 텍스트 출력")
     p.add_argument("--fetch", action="store_true", help="promises: 아직 받지 않은 공시 본문을 받는다 (사용자 승인 후)")
+    p.add_argument("--peers", help="price: 비교할 경쟁사 (쉼표로 구분, 받아 둔 기업 이름)")
     p.add_argument("--attribute", choices=["plan", "result"], default="result",
                    help="promises: 현 대표이사의 기록을 결과 시점(result, 기본·사용자 결정 2026-11-18)/약속 시점(plan) 대표이사로 볼지")
     a = p.parse_args()
@@ -115,6 +120,9 @@ def main() -> None:
         return
     if a.cmd == "safety":
         safety_cmd(a)
+        return
+    if a.cmd == "price":
+        price_cmd(a)
         return
     if a.cmd == "search":
         results, warnings = service.search(a.query)
@@ -207,6 +215,12 @@ def resolve_local(query: str, pick: int | None) -> dict:
     if hit.empty:
         sys.exit(f"'{query}' 는 아직 수집되지 않은 기업입니다. 기업 수집(DART/SEC 요청)이 먼저 필요합니다.")
     if len(hit) > 1 and pick is None:
+        # 이름이 정확히 같거나 티커가 정확히 같은 후보가 하나뿐이면 그것을 고른다 (예: 'LG' → (주)LG, LG화학 아님)
+        bare = hit["name"].str.replace(r"\(주\)|주식회사|\s", "", regex=True).str.lower()
+        exact = hit[bare.eq(q) | hit["ticker"].fillna("").str.replace(" ", "").str.lower().str.split(",")
+                    .apply(lambda ts: q in ts)]
+        if len(exact) == 1:
+            return exact.iloc[0].to_dict()
         for i, r in enumerate(hit.itertuples()):
             print(f"  [{i}] {r.name} ({r.ticker}) {r.company_id}")
         sys.exit("후보가 여러 개입니다. --pick 번호 로 선택하세요.")
@@ -479,6 +493,61 @@ def safety_cmd(a) -> None:
         for fl in r["flags"]:
             print(f"   · {fl}")
     print("\n   ※ 기준 5는 통과선을 두지 않는다 (업종마다 적정 수준이 다름). 같은 업종끼리 비교해서 본다.")
+
+
+def price_cmd(a) -> None:
+    """잠정 가격 판단: PER·PBR — 숫자와 경쟁사 비교만 보여준다 (판정 없음)."""
+    c = resolve_local(a.query, a.pick)
+    peers = [resolve_local(p.strip(), None) for p in (a.peers or "").split(",") if p.strip()]
+    targets = [c] + peers
+    if a.fetch:
+        for t in targets:
+            cid = t["company_id"]
+            print(f"[{t['name']}]")
+            prices.fetch(cid)
+            if cid.startswith("KR:"):
+                ys = dart_shares.target_years()
+                miss = [m for m in dart_shares.missing(cid, ys) if m[0] == "stockTotqySttus"]
+                if miss:
+                    print(f"  [DART 주식 수] {len(miss)}건")
+                    dart_shares.fetch(cid, ys)
+    r = price_level.analyze(c["company_id"])
+    print(f"\n=== {c['name']} | {c['company_id']} | 잠정 가격 판단: PER·PBR (판정 없음) ===")
+    m = r.get("meta") or {}
+    if m:
+        print(f"주가 출처: {m.get('source')} {m.get('symbol')} ({m.get('currency')}), 받은 시각 {m.get('fetched_at')}")
+    x = lambda v: "-" if v is None else f"{v:.1f}배"  # noqa: E731
+    num = lambda v: "-" if v is None else f"{v:,.0f}" if abs(v) >= 100 else f"{v:,.2f}"  # noqa: E731
+    if r["rows"]:
+        print(f"\n{'회계연도':>7} {'날짜':>11} {'주가':>11} {'PER(그해)':>10} {'PER(5년평균)':>12} {'PBR':>7}  "
+              f"{'주당순이익':>10} {'5년평균':>10} {'주당장부가치':>12}")
+        for w in r["rows"]:
+            print(f"{w['year']:>7} {str(w['date'] or '-'):>11} {num(w['price']):>11} {x(w['per']):>10} {x(w['per_avg']):>12} "
+                  f"{x(w['pbr']):>7}  {num(w['eps']):>10} {num(w['eps_avg']):>10} {num(w['bps']):>12}")
+        cur = r["current"]
+        if cur:
+            print(f"{'현재':>7} {str(cur['date']):>11} {num(cur['price']):>11} {x(cur['per']):>10} {x(cur['per_avg']):>12} "
+                  f"{x(cur['pbr']):>7}  ({cur['basis_year']}회계연도 이익·장부가치 기준)")
+        notes = [(w["year"], t) for w in r["rows"] for t in w["notes"]]
+        if notes:
+            print("\n[연도별 표시]")
+            for y, t in notes:
+                print(f"   {y}: {t}")
+    if peers:
+        print("\n[경쟁사 비교: 현재]")
+        print(f"   {'기업':<16} {'PER(그해)':>10} {'PER(5년평균)':>12} {'PBR':>7}  기준 회계연도")
+        for t in targets:
+            rr = r if t is c else price_level.analyze(t["company_id"])
+            cu = rr.get("current")
+            if cu:
+                print(f"   {t['name'][:14]:<16} {x(cu['per']):>10} {x(cu['per_avg']):>12} {x(cu['pbr']):>7}  {cu['basis_year']}")
+            else:
+                print(f"   {t['name'][:14]:<16} 계산 안 됨: {'; '.join(rr['flags'])[:80]}")
+    if r["flags"]:
+        print("\n[회사 단위 표시]")
+        for fl in r["flags"]:
+            print(f"   · {fl}")
+    print("\n   ※ 판정하지 않는다. 경쟁사 비교가 우선, 자기 과거는 보조. 내재가치 계산은 13~14주차 이후에 더한다.")
 
 
 def us_promises_cmd(c: dict, a) -> None:

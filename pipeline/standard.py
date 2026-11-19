@@ -174,11 +174,23 @@ ITEMS: list[Item] = [
     Item("interest_bearing_debt", "이자부 부채(차입금·사채·리스)", "stock", BS, (), r"(?!x)x", (),
          note="스프레드의 이자율 = 이자비용 ÷ 평균 이자부 부채 (사용자 결정). 한국: 재무상태표의 차입금·사채·리스부채 줄 합산. "
               "미국: 장기 차입금(유동분 포함) + 기업어음·단기차입금 + 금융리스부채. 계산 규칙은 KR_DEBT_RX, US_DEBT."),
+    # ---- 잠정 가격 판단: PER·PBR (사용자 결정 2026-11-19) ----
+    Item("eps_basic", "기본주당순이익(보통주)", "per_share", PL, ("ifrs-full_BasicEarningsLossPerShare",),
+         r"^(보통주)?기본(및희석|/희석)?주당(순)?(이익|손실|손익)(\(손실\))?(\(단위:원\))?$|^(보통주)?주당(순)?이익(\(손실\))?$",
+         ("us-gaap:EarningsPerShareBasic", "ifrs-full:BasicEarningsLossPerShare"),
+         kr_exclude=r"우선주|계속|중단|^(보통주)?희석",
+         note="공시된 값 그대로. PER = 보통주 주가 ÷ 기본주당순이익 (우선주·희석·계속영업 주당이익 제외)."),
+    Item("equity_parent", "지배주주 자본", "stock", BS, ("ifrs-full_EquityAttributableToOwnersOfParent",),
+         r"^지배(기업|주주|회사)(의)?(소유주|주주)?(에게귀속되는자본|지분|소유지분)$",
+         ("us-gaap:StockholdersEquity", "ifrs-full:EquityAttributableToOwnersOfParent"),
+         kr_exclude=r"비지배",
+         note="PBR의 주당 장부가치 = 지배주주 자본 ÷ 유통주식 수. 비지배지분이 없어 구분 줄이 없는 해는 자본총계(파생)."),
     # 미국 주식 수 (한국은 DART '주식의 총수 현황'·'자기주식 취득 및 처분 현황' API 사용: pipeline/dart_shares.py)
     Item("shares_issued", "발행주식 총수(미국)", "shares_stock", BS, (), r"(?!x)x",
          ("us-gaap:CommonStockSharesIssued",), note="자기주식 포함."),
     Item("shares_outstanding", "유통주식 수(미국)", "shares_stock", BS, (), r"(?!x)x",
-         ("us-gaap:CommonStockSharesOutstanding",), note="자기주식 제외."),
+         ("us-gaap:CommonStockSharesOutstanding", "dei:EntityCommonStockSharesOutstanding"),
+         note="자기주식 제외. 재무상태표 태그가 없으면 10-K 표지의 주식 수(제출일 기준, '범위 차이')."),
     Item("shares_retired", "소각 주식 수(미국)", "shares", CF, (), r"(?!x)x",
          ("us-gaap:StockRepurchasedAndRetiredDuringPeriodShares", "us-gaap:TreasuryStockSharesRetired"),
          note="매입 즉시 소각하거나 자기주식을 소각한 수량."),
@@ -213,6 +225,8 @@ US_TAG_RULES: dict[tuple[str, str], tuple[str | None, str, str]] = {
         (None, "scope", "장기 계약 재고에서 고객 선수금·진행청구액을 뺀 값 (예: Boeing)"),
     ("equity_total", "us-gaap:StockholdersEquity"):
         ("nci", "scope", "지배주주 자본만 (비지배지분 제외)"),
+    ("shares_outstanding", "dei:EntityCommonStockSharesOutstanding"):
+        (None, "scope", "10-K 표지의 주식 수: 회계연도 말이 아니라 제출일 무렵 기준"),
     ("interest_expense", "us-gaap:InterestExpenseDebt"):
         (None, "scope", "차입금 이자만 (리스 이자 등 제외될 수 있음, 예: Walmart)"),
     ("interest_expense", "ifrs-full:FinanceCosts"):
@@ -261,6 +275,9 @@ KR_COMPONENTS: list[tuple[str, tuple[str, ...], str, str, str]] = [
      r"(?!x)x", "세부 줄 합산: 개발비·소프트웨어·건설중인무형자산 등의 취득"),
     ("revenue", PL, r"(?!x)x", r"^ifrs-full_RevenueFrom(SaleOfGoods|RenderingOfServices|ConstructionContracts)$",
      "세부 줄 합산: 제품·상품 매출 + 용역 매출 + 건설계약 매출"),
+    # (실제 사례: 카카오 2025·네이버 2023은 계속영업·중단영업 주당이익으로만 공시)
+    ("eps_basic", PL, r"^(계속|중단)영업(보통주)?기본주당(순)?(이익|손실|손익)(\(손실\))?$", r"(?!x)x",
+     "세부 줄 합산: 계속영업 + 중단영업 기본주당이익"),
 ]
 
 NCI_TAGS = ("us-gaap:MinorityInterest", "us-gaap:NetIncomeLossAttributableToNoncontrollingInterest")
@@ -409,6 +426,14 @@ def _kr(company_id: str) -> pd.DataFrame:
     # 이자비용: 손익계산서 본문에 없어 사업보고서 XBRL 주석에서 (투자기준 5)
     from . import dart_xbrl
     extra += dart_xbrl.interest_expense(company_id)
+    # 지배주주 자본: 비지배지분이 없어 구분 줄이 없는 해 → 자본총계와 같은 값 (순이익과 같은 원칙)
+    bsx = full[full["sj_div"] == "BS"]
+    nci_bs = set(bsx.loc[bsx["nm"].str.contains("비지배") | bsx["code"].str.contains("(?i)noncontrolling"), "bsns_year"].astype(int))
+    have_now = set(zip(out["item"], out["year"]))
+    for r in out[out["item"] == "equity_total"].itertuples():
+        if ("equity_parent", r.year) not in have_now and r.year not in nci_bs and pd.notna(r.value):
+            extra.append({**r._asdict(), "item": "equity_parent", "method": "derived", "match": "derived",
+                          "match_note": "비지배지분이 없어 자본 귀속 구분이 없음 → 자본총계 = 지배주주 자본"})
     if extra:
         out = pd.concat([out, pd.DataFrame(extra).drop(columns=["Index"], errors="ignore")], ignore_index=True)
     return out
@@ -576,7 +601,17 @@ def checks(df: pd.DataFrame) -> pd.DataFrame:
 def is_financial(company: dict) -> bool:
     p = company.get("profile") or {}
     if company["market"] == "KR":
-        return str(p.get("induty_code", "")).startswith(("64", "65", "66"))
+        code = str(p.get("induty_code", ""))
+        if not code.startswith(("64", "65", "66")):
+            return False
+        # 지주회사(64992)는 금융지주(KB금융)와 일반 지주회사(LG)가 같은 코드다.
+        # 금융업 재무상태표에는 유동·비유동 구분이 없으므로, 유동자산 줄이 있으면 금융업이 아닌 것으로 본다.
+        if code.startswith("6499"):
+            raw = service.raw_financials(company["company_id"])
+            if not raw.empty and (raw["account_id"].astype(str).str.contains("CurrentAssets", regex=False)
+                                  & (raw["sj_div"] == "BS")).any():
+                return False
+        return True
     try:
         return 6000 <= int(p.get("sic") or 0) <= 6799
     except ValueError:

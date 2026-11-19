@@ -69,6 +69,7 @@ def load(company_id: str, years: list[int]) -> dict[int, dict]:
             if tot:
                 row["issued"], row["treasury"], row["outstanding"] = (
                     _n(tot.get("istc_totqy")), _n(tot.get("tesstk_co")), _n(tot.get("distb_stock_co")))
+                row["rcept_no"] = tot.get("rcept_no")   # 사업보고서 접수번호 (앞 8자리 = 제출일, 분할 맞추기용)
         f = d / f"tesstkAcqsDspsSttus_{y}.json"
         if f.exists():
             r = json.loads(f.read_text(encoding="utf-8"))
