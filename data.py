@@ -832,10 +832,14 @@ def runway_cmd(a) -> None:
         print(f"   {'연도':<6}{'연구개발비':>10}{'현금':>10}{'단기금융':>10}{'합계':>10}{'(기타금융)':>11}"
               f"{'영업CF':>10}{'설비투자':>10}{'빠져나감':>10}{'버티는 해':>9}")
         for x in r["rows"]:
-            rw = "해당 없음" if x["burn"] is None and x["ocf"] is not None else (
-                "-" if x["runway"] is None else f"{x['runway']:.1f}년")
+            ok = x["ocf"] is not None and x["ocf"] == x["ocf"] and x["capex"] is not None and x["capex"] == x["capex"]
+            if ok and x["burn"] is None:
+                rw = f"남음(+{f(x['ocf'] - x['capex'])})"      # 사용자 결정 b: 남은 금액 표시
+            else:
+                rw = "-" if x["runway"] is None else f"{x['runway']:.1f}년"
+            state = "" if not ok else ("①" if x["burn"] is None else ("②" if x["ocf"] >= 0 else "③"))
             print(f"   {x['year']:<6}{f(x['rnd']):>10}{f(x['cash']):>10}{f(x['short']):>10}{f(x['total']):>10}"
-                  f"{'(' + f(x['other']) + ')':>11}{f(x['ocf']):>10}{f(x['capex']):>10}{f(x['burn']):>10}{rw:>9}")
+                  f"{'(' + f(x['other']) + ')':>11}{f(x['ocf']):>10}{f(x['capex']):>10}{f(x['burn']):>10}{rw:>13} {state}")
         blanks = [f"{x['year']}: {x['rnd_reason'][:60]}" for x in r["rows"] if x["rnd"] is None and x["rnd_reason"]]
         last = r["rows"][-1] if r["rows"] else {}
         print(f"   현금에 넣은 줄 ({last.get('year', '')}): {', '.join(last.get('lines', [])) or '-'}")
@@ -858,6 +862,33 @@ def runway_cmd(a) -> None:
         for x in b:
             print(f"   {x['year']:<6}{g(x['debt_ratio']):>9}{g(x['icr'], 1):>9}{f(x['debt']):>11}{f(x['net_debt']):>11}"
                   f"{f(x['fin_net']):>11}{f(x['equity']):>10}" + ("" if cid.startswith("US:") else f"{f(x['hybrid']):>11}"))
+        wb = runway.with_borrowing(cid, r["rows"])
+        print(f"\n   [빌린 돈까지 쓸 때 버티는 해] ① 부채비율 상한 = 최근 5년 최고치  ④ 이자보상 1배까지 (단위: {unit})")
+        print(f"   {'연도':<6}{'①상한':>8}{'①더빌림':>11}{'①버티는해':>11}{'이자율':>8}{'④더빌림':>11}{'④버티는해':>11}")
+        for x in wb:
+            def yy(v, room):
+                if x["burn"] is None and x["ocf"] is not None and x["ocf"] == x["ocf"]:
+                    return "남음"
+                return "-" if v is None else f"{v:.1f}년"
+            r4 = f(x["room4"]) if x["room4"] is not None else (x["why4"] or "-")
+            print(f"   {x['year']:<6}{g(x['dr_cap']):>8}{f(x['room1']):>11}{yy(x['runway1'], x['room1']):>11}"
+                  f"{('-' if not x['rate'] else f'{x[chr(114)+chr(97)+chr(116)+chr(101)]:.1%}'):>8}{r4:>11}{yy(x['runway4'], x['room4']):>11}")
+        if wb:
+            print(f"   이자율 출처: {wb[-1]['rate_src']}. 영업손실인 해는 ④ 더 빌림 = 0")
+        sp_ = runway.supernal(cid)
+        if sp_:
+            print(f"\n   [공동기업 슈퍼널 (지분 {sp_['stake']:.2%}, 지분법 — 현대차 연결에 들어 있지 않음)] (단위: {unit})")
+            print(f"   {'연도':<6}{'매출':>8}{'순손실':>10}{'현대차 몫':>10}{'유동자산':>10}{'자산':>10}{'부채':>9}{'자본':>10}{'현대차 장부가':>13}")
+            for y in sorted(sp_["rows"]):
+                s_ = sp_["rows"][y]
+                print(f"   {y:<6}{f(s_['revenue']):>8}{f(s_['net_income']):>10}{f(s_['parent_share_loss']):>10}"
+                      f"{f(s_['current_assets']):>10}{f(s_['assets']):>10}{f(s_['liabilities']):>9}{f(s_['equity']):>10}"
+                      f"{f(s_['book_value']):>13}")
+            print("   ※ 현금·영업CF 미공시 → 버티는 해 계산 불가. 출처: 현대차 연결 주석 공동기업 요약재무정보"
+                  " (inputs/case3/supernal.json). 현대차 몫 = 순손실 × 지분율 (단순 계산)")
+        if r.get("vehicle"):
+            print("   ※ 현대차는 차량 부문 기준 (금융 자회사 제외, 사용자 결정): 현금·영업CF·투자·부채·자본·영업이익·차입금은 부문정보 주석"
+                  " (inputs/case3/hyundai_vehicle.json). 투자는 '유형ㆍ무형자산 취득 및 처분' 순액 → 정의 차이. 연구개발비·이자비용·재무활동CF·주식발행은 연결")
         cap = runway.capacity_facts(cid)
         cl = cap.get("credit_lines")
         if cl:
@@ -871,7 +902,9 @@ def runway_cmd(a) -> None:
         if cap.get("equity_events"):
             print(f"     [출처: SEC 10-K FY2025, accn {cl['rcept_no'] if cl else ''}, Liquidity and Capital Resources]")
             print("   ※ 주식발행 열은 표준 태그로 잡히는 것만 (공모 증자·ATM은 회사 고유 태그라 빠짐 → 위 목록)")
-    print("\n   ※ 빠져나감 = 영업CF − 설비투자가 마이너스일 때 그 크기. 플러스면 '해당 없음'. 버티는 해 = 합계 ÷ 빠져나감")
+    print("\n   ※ 빠져나감 = 영업CF − 설비투자가 마이너스일 때 그 크기. 버티는 해 = 합계 ÷ 빠져나감")
+    print("   ※ 상태: ① 번 돈으로 설비투자까지 하고 남음 (남은 금액 표시)  ② 영업CF는 플러스지만 설비투자가 더 큼"
+          " (버티는 해 = 이 속도로 투자하며 자기 돈만 쓸 때)  ③ 영업CF부터 마이너스")
     print("   ※ (기타금융)은 기타금융자산·기타투자자산(유동). 합계에 넣지 않음 (사용자 결정)")
     print("   ※ 버티는 해에는 차입 여력·증자·정부 지원을 넣지 않음. 빌릴 능력은 아래 표로 따로 봄")
     print("   ※ 부채비율·이자보상비율은 safety 도구 값 그대로. 순차입금 = 이자부 부채 − (현금 + 단기 금융자산)")

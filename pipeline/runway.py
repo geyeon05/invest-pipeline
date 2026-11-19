@@ -6,7 +6,7 @@
 - 현금 = 현금및현금성자산 + 분명한 단기 금융자산 (단기금융상품, 단기투자, 유동 당기손익-공정가치 금융자산).
   '기타금융자산·기타투자자산'(유동)은 넣지 않고 옆에 따로 표시 (사용자 결정 a).
 - 버티는 기간 = 현금 ÷ 1년에 빠져나가는 현금. 빠져나가는 현금 = 영업CF − 유형자산 취득이 마이너스일 때 그 크기.
-  플러스면 '해당 없음' (돈을 벌어 설비투자까지 감당).
+  플러스면 '남음(+금액)'으로 표시 (사용자 결정 b). 상태 ① 남음 ② 영업CF는 플러스지만 설비투자가 더 큼 ③ 영업CF부터 마이너스.
 - Joby는 스팩 합병(2021) 이후만 (사용자 결정).
 세부 규칙(줄 이름·코드, 유동 구간 판별)은 AI가 정한 값 → criteria/README.md
 """
@@ -107,11 +107,18 @@ def table(company_id: str, years: int = 5) -> dict:
     if start:
         ys = [y for y in ys if y >= start]
     ys = ys[-years:]
+    veh = vehicle(company_id)
     rows = []
     for y in ys:
         ocf = w.at["operating_cf", y] if "operating_cf" in w.index and y in w.columns else None
         capex = w.at["capex_ppe", y] if "capex_ppe" in w.index and y in w.columns else None
         c = cash.get(y, {})
+        if veh:                      # 금융 자회사를 뺀 차량 부문 (사용자 결정)
+            v = veh.get(y, {})
+            ocf, capex = v.get("ocf"), v.get("capex_net")
+            c = {"cash": v.get("cash"), "short": 0.0 if v.get("cash") is not None else None,
+                 "other": v.get("current_fin"), "finance_arm": False,
+                 "lines": ["차량 부문 현금및현금성자산 (유동금융자산은 기타금융 칸)"]} if v.get("cash") is not None else {}
         total = (c.get("cash") or 0) + (c.get("short") or 0) if c else None
         fcf = None if ocf is None or ocf != ocf or capex is None or capex != capex else ocf - capex
         burn = -fcf if fcf is not None and fcf < 0 else None
@@ -120,7 +127,22 @@ def table(company_id: str, years: int = 5) -> dict:
                      "ocf": ocf, "capex": capex, "burn": burn,
                      "runway": (total / burn) if burn and total is not None else None,
                      "finance_arm": c.get("finance_arm", False), "lines": c.get("lines", [])})
-    return {"currency": cur, "rows": rows, "rnd_src": {y: v.get("src", "") for y, v in rd.items()}}
+    return {"currency": cur, "rows": rows, "rnd_src": {y: v.get("src", "") for y, v in rd.items()},
+            "vehicle": bool(veh)}
+
+
+VEHICLE = ROOT / "inputs" / "case3" / "hyundai_vehicle.json"
+
+
+def vehicle(company_id: str) -> dict:
+    """현대차 차량 부문 숫자 {연도: {...}} (원 단위). 해당 회사가 아니면 {}."""
+    if not VEHICLE.exists():
+        return {}
+    d = json.loads(VEHICLE.read_text(encoding="utf-8"))
+    if d.get("company_id") != company_id:
+        return {}
+    return {int(y): {k: (v * 1e6 if isinstance(v, (int, float)) else v) for k, v in r.items()}
+            for y, r in d["years"].items()}
 
 
 # ---------------- 빌릴 능력 · 주식 조달 (사용자 결정 2026-11-19: A·B·C(총 한도만)·E) ----------------
@@ -172,13 +194,117 @@ def borrowing(company_id: str, years: list[int]) -> list[dict]:
     debt = std[std["item"] == "interest_bearing_debt"].set_index("year")["value"].to_dict()
     cash = _kr_cash(company_id) if company_id.startswith("KR:") else _us_cash(company_id)
     fin = financing(company_id)
+    veh = vehicle(company_id)
+    ie_all = std[std["item"] == "interest_expense"].set_index("year")["value"].to_dict()
     rows = []
     for y in years:
         c = cash.get(y, {})
         total = (c.get("cash") or 0) + (c.get("short") or 0) if c else None
         d = debt.get(y)
-        rows.append({"year": y, "debt_ratio": s.get(y, {}).get("debt_ratio"), "icr": s.get(y, {}).get("icr"),
+        dr_, icr_ = s.get(y, {}).get("debt_ratio"), s.get(y, {}).get("icr")
+        if veh:                      # 차량 부문 (사용자 결정): 부채비율·이자보상·차입금·순차입금
+            v = veh.get(y, {})
+            d = v.get("borrowings")
+            total = v.get("cash")
+            dr_ = v["liabilities"] / v["equity"] if v.get("liabilities") and v.get("equity") else None
+            ie = ie_all.get(y)
+            icr_ = v["operating_income"] / ie if v.get("operating_income") is not None and ie else None
+        rows.append({"year": y, "debt_ratio": dr_, "icr": icr_,
                      "debt": d, "net_debt": (d - total) if d is not None and d == d and total is not None else None,
                      "fin_net": fin.get(y, {}).get("net"), "equity": fin.get(y, {}).get("equity"),
                      "hybrid": fin.get(y, {}).get("hybrid")})
     return rows
+
+
+# ---------------- 빌린 돈까지 쓸 때 버티는 해 (사용자 결정 2026-11-19: ①, ④) ----------------
+# ① 부채비율 상한 = 그 회사의 최근 5년(그 해 포함) 중 가장 높았던 부채비율. 더 빌릴 수 있는 돈 = 상한 × 자본 − 부채
+# ④ 이자보상 하한 1배 (= safety의 '분명한 위험' 경계). 더 빌릴 수 있는 돈 = (영업이익 − 이자비용) ÷ 이자율
+#    이자율 = 회사 이자율(이자비용 ÷ 평균 이자부 부채, spread 도구와 같음). 영업이익 ≤ 0 이면 0.
+#    현대차만 시장 금리(ECOS 회사채 3년 AA- 연평균): 금융 자회사 때문에 회사 이자율이 왜곡됨 (사용자 결정)
+MARKET_RATE_FOR: set = set()   # 현대차는 이후 '차량 부문으로 따로 보기'로 바뀌어 차량 부문 이자율을 씀 (사용자 결정)
+MARKET_RATE_FILE = ROOT / "data" / "raw" / "macro" / "721Y001_A_7020000.json"
+ICR_FLOOR = 1.0
+DR_WINDOW = 5
+
+
+def _market_rate() -> dict:
+    if not MARKET_RATE_FILE.exists():
+        return {}
+    rows = json.loads(MARKET_RATE_FILE.read_text(encoding="utf-8"))["StatisticSearch"]["row"]
+    return {int(r["TIME"]): float(r["DATA_VALUE"]) / 100 for r in rows}
+
+
+def with_borrowing(company_id: str, rows: list[dict]) -> list[dict]:
+    from . import spread
+    std = standard.standardize(company_id)
+    w = std.pivot_table(index="item", columns="year", values="value", aggfunc="first")
+
+    def g(k, y):
+        v = w.at[k, y] if k in w.index and y in w.columns else None
+        return None if v is None or v != v else float(v)
+    ys = sorted(int(y) for y in w.columns)
+    start = START_YEAR.get(company_id, ys[0] if ys else 0)
+    veh = vehicle(company_id)
+    if veh:   # 차량 부문 값으로 바꿔 끼움 (부채·자본·영업이익). 이자비용은 연결 주석 값(금융 부문 이자는 매출원가에 있어 빠짐)
+        for y, v in veh.items():
+            for k, vk in (("total_liabilities", "liabilities"), ("equity_total", "equity"), ("operating_income", "operating_income")):
+                if v.get(vk) is not None:
+                    if y not in w.columns:
+                        w[y] = float("nan")
+                    w.loc[k, y] = v[vk]
+        ys = sorted(veh)            # 부채비율 창도 차량 부문 연도만 (연결 연도와 섞지 않음)
+    dr = {y: g("total_liabilities", y) / g("equity_total", y) for y in ys
+          if y >= start and g("total_liabilities", y) is not None and g("equity_total", y)}
+    sp = spread.by_year(std, [r["year"] for r in rows])
+    mkt = _market_rate() if company_id in MARKET_RATE_FOR else {}
+    out = []
+    for r in rows:
+        y = r["year"]
+        L, E, oi, ie = g("total_liabilities", y), g("equity_total", y), g("operating_income", y), g("interest_expense", y)
+        past = [dr[k] for k in range(y - DR_WINDOW + 1, y + 1) if k in dr]
+        cap = max(past) if past else None
+        room1 = max(0.0, cap * E - L) if cap is not None and E is not None and L is not None else None
+        if company_id in MARKET_RATE_FOR:
+            rate, rate_src = mkt.get(y), "시장(회사채 AA-)"
+        elif veh:
+            b0, b1 = (veh.get(y - 1) or {}).get("borrowings"), (veh.get(y) or {}).get("borrowings")
+            avg = (b0 + b1) / 2 if b0 and b1 else b1
+            rate, rate_src = ((ie / avg) if ie and avg else None), "차량 부문(이자비용 ÷ 평균 차입금)"
+        else:
+            rate, rate_src = (sp.get(y) or {}).get("rate"), "회사"
+        if oi is None:
+            room4, why4 = None, "영업이익 없음"
+        elif oi <= 0:
+            room4, why4 = 0.0, "영업손실"
+        elif not rate or ie is None:
+            room4, why4 = None, "이자율·이자비용 없음"
+        else:
+            room4, why4 = max(0.0, (oi / ICR_FLOOR - ie) / rate), ""
+        total, burn = r.get("total"), r.get("burn")
+
+        def yrs(room):
+            return (total + room) / burn if burn and total is not None and room is not None else None
+        out.append({**r, "dr_cap": cap, "room1": room1, "runway1": yrs(room1),
+                     "room4": room4, "runway4": yrs(room4), "why4": why4, "rate": rate, "rate_src": rate_src})
+    return out
+
+
+# ---------------- 슈퍼널 (현대차 공동기업 44.44%, 사용자 결정 2026-11-19: 표에 따로 넣음) ----------------
+SUPERNAL = ROOT / "inputs" / "case3" / "supernal.json"
+
+
+def supernal(parent_id: str) -> dict:
+    if not SUPERNAL.exists():
+        return {}
+    d = json.loads(SUPERNAL.read_text(encoding="utf-8"))
+    if d.get("parent") != parent_id:
+        return {}
+    rows = {}
+    for y, r in d["years"].items():
+        ca, na = r["current_assets"], r["noncurrent_assets"]
+        cl, nl = r["current_liabilities"], r["noncurrent_liabilities"]
+        rows[int(y)] = {"current_assets": ca * 1e6, "assets": (ca + na) * 1e6, "liabilities": (cl + nl) * 1e6,
+                        "equity": (ca + na - cl - nl) * 1e6, "net_income": r["net_income"] * 1e6,
+                        "revenue": r["revenue"] * 1e6, "parent_share_loss": r["net_income"] * d["stake"] * 1e6,
+                        "book_value": None if r.get("book_value") is None else r["book_value"] * 1e6}
+    return {"stake": d["stake"], "rows": rows}

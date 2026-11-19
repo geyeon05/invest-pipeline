@@ -1,0 +1,11 @@
+{
+  "_설명": "슈퍼널(supernal, LLC): 현대차의 공동기업(지분 44.44%, 지분법), 연결 대상이 아님 → 현대차 연결 연구개발비·현금에 슈퍼널 지출은 들어 있지 않음. 현대차 연결 주석 '관계기업 및 공동기업 투자'의 요약 재무정보를 AI가 옮겨 적음. 단위 백만원. 현금·영업CF는 공시되지 않아 정해 둔 방식의 '버티는 해'는 계산할 수 없음. 검산: 2025년 (자산 − 부채) × 44.44% = 213,392 ≈ 현대차 장부가 213,401.",
+  "parent": "KR:00164742",
+  "stake": 0.4444,
+  "years": {
+    "2025": {"current_assets": 281096, "noncurrent_assets": 350271, "current_liabilities": 50921, "noncurrent_liabilities": 100265, "revenue": 0, "net_income": -450403, "book_value": 213401, "src": "20260318001394 연결 주석 공동기업 요약재무정보 (당기): supernal, LLC | 281,096 | 350,271 | 50,921 | 100,265 | - | (450,403); 공동기업 목록: 도심항공기 기체 개발 | 미국 | 44.44% | 213,401"},
+    "2024": {"current_assets": 278220, "noncurrent_assets": 413567, "current_liabilities": 87089, "noncurrent_liabilities": 112965, "revenue": 0, "net_income": -658359, "book_value": 221677, "src": "20260318001394 (전기): supernal, LLC | 278,220 | 413,567 | 87,089 | 112,965 | - | (658,359); 장부가 221,677"},
+    "2023": {"current_assets": 184936, "noncurrent_assets": 382837, "current_liabilities": 109761, "noncurrent_liabilities": 99471, "revenue": 0, "net_income": -526387, "book_value": null, "src": "20240313001451 (당기): supernal, LLC | 184,936 | 382,837 | 109,761 | 99,471 | 0 | (526,387)"},
+    "2022": {"current_assets": 338831, "noncurrent_assets": 216123, "current_liabilities": 42290, "noncurrent_liabilities": 108565, "revenue": 0, "net_income": -195567, "book_value": null, "src": "20240313001451 (전기): supernal, LLC | 338,831 | 216,123 | 42,290 | 108,565 | 0 | (195,567)"}
+  }
+}
