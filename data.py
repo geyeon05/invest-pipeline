@@ -22,22 +22,27 @@
   uv run data.py promises 삼성전자 --fetch          # 위 목록의 본문을 DART에서 받은 뒤 판정 (사용자 승인 후)
   ※ promises 는 이미 수집된 기업만 대상으로 하고, 기업 재수집·기업목록 갱신을 하지 않는다.
 
-  투자기준 2: 꾸준한 현금 창출 (결과만 보여줌, 판정 없음, 외부 요청 없음)
+  전체 지도: criteria/README.md (투자기준 = 규칙 / 분석 도구 = 판정 없이 숫자)
+
+  분석 도구: 현금 창출 (결과만 보여줌 + 내 기준 '영업CF가 꾸준히 늘었나', 외부 요청 없음)
   uv run data.py cashflow 삼성전자 [--source]      # 최근 5년 영업CF·FCF·현금 전환율 + 표시
 
-  투자기준 3: 주주환원 기록 (결과만 보여줌, 판정 없음)
+  분석 도구: 자본 배분 (번 돈을 어디에 썼고 결과가 어땠나, 판정 없음, 외부 요청 없음)
+  uv run data.py allocation 삼성전자               # 영업CF·설비 재투자·FCF·주주환원·부채 증감·ROE + 의도를 논의할 사실 5가지
+
+  분석 도구: 주주환원 상세 (자본 배분의 상세 화면) (결과만 보여줌, 판정 없음)
   uv run data.py returns 삼성전자 [--source]       # 최근 5년 배당·자사주·소각·환원 비율·주식 수 (외부 요청 없음)
   uv run data.py returns 삼성전자 --fetch          # 한국: DART 주식 수 데이터를 받은 뒤 표시 (사용자 승인 후)
 
-  투자기준 4: 이익의 질 · 이익조정 신호 (결과만 보여줌, 판정 없음)
+  분석 도구: 이익의 질 · 이익조정 신호 (결과만 보여줌, 판정 없음)
   uv run data.py quality 삼성전자                  # 최근 5년 발생액·매출채권·재고·작은 이익·빅 배스 (외부 요청 없음)
   uv run data.py quality 삼성전자 --fetch          # 대표이사 데이터(한국 DART 임원 현황 / 미국 10-K)를 받은 뒤 표시 (승인 후)
 
-  투자기준 5: 재무 안전성 (결과만 보여줌 + 분명한 위험 표시)
+  분석 도구: 재무 안전성 (결과만 보여줌 + 분명한 위험 표시)
   uv run data.py safety 삼성전자                   # 최근 5년 부채비율·유동비율·당좌비율·이자보상비율·부채/영업CF
   uv run data.py safety 삼성전자 --fetch           # 한국: 이자비용용 사업보고서 XBRL을 받은 뒤 표시 (승인 후)
 
-  잠정 가격 판단: PER·PBR (판정 없음, 13~14주차 내재가치 계산 전까지의 비교 기준)
+  분석 도구: 잠정 가격 판단 PER·PBR (판정 없음, 13~14주차 내재가치 계산 전까지의 비교 기준)
   uv run data.py price 삼성전자 --peers SK하이닉스   # 최근 5년·현재 PER(그해 이익/5년 평균)·PBR + 경쟁사 비교
   uv run data.py price 삼성전자 --fetch            # 주가(Yahoo Finance)·한국 주식 수(DART)를 받은 뒤 표시 (승인 후)
 """
@@ -329,10 +334,10 @@ def promises_cmd(a) -> None:
 
 
 def cashflow_cmd(a) -> None:
-    """투자기준 2: 꾸준한 현금 창출 — 결과만 보여준다 (판정 없음)."""
+    """분석 도구: 현금 창출 — 결과만 보여준다 (판정 없음)."""
     c = resolve_local(a.query, a.pick)
     r = cashflow.analyze(c["company_id"])
-    print(f"\n=== {c['name']} | {c['company_id']} | 기준 2: 꾸준한 현금 창출 (최근 5년, 결과만 표시) ===")
+    print(f"\n=== {c['name']} | {c['company_id']} | 분석 도구: 현금 창출 (최근 5년, 결과만 표시) ===")
     if not r["rows"]:
         print("표시할 결과가 없습니다.")
     else:
@@ -348,7 +353,18 @@ def cashflow_cmd(a) -> None:
         k = r["counts"]
         print(f"\n[5년 중 몇 년] 영업CF > 0: {k['ocf_pos']}/{k['years']}  |  FCF > 0: {k['fcf_pos']}/{k['fcf_known']}"
               f"  |  현금 전환율 ≥ 1.0: {k['conv_ge1']}/{k['conv_known']} (흑자인 해 기준)")
-        print("   ※ 통과선이 아닌 참고용 개수 (기준 2는 판정하지 않음)")
+        print("   ※ 통과선이 아닌 참고용 개수 (이 도구는 판정하지 않음)")
+        st = r.get("steady") or {}
+        if st:
+            ok = {True: "충족", False: "미충족", None: "판단 불가"}[st["ok"]]
+            cg = "-" if st["cagr"] is None else f"{st['cagr']:+.1%}"
+            print(f"\n[내 기준: 영업CF가 꾸준히 늘었나 (프로필 6-①, 성장기 회사의 증거)] {ok}"
+                  + (f"  ({st['why']})" if st.get("why") and st["ok"] is None else ""))
+            print(f"   전년보다 늘어난 해 {st['ups']}/{st['changes']}번 (기준 3번 이상)  |  5년 연평균 {cg} (기준 0% 초과)")
+            if st["decreases"]:
+                print("   감소한 해: " + ", ".join(f"{y} {c:+.1%}" for y, c in st["decreases"]))
+            if st["negatives"]:
+                print(f"   ● 경고: 영업CF가 마이너스인 해 {st['negatives']} → 이유 확인 (6-①)")
         notes = [(x["year"], n) for x in r["rows"] for n in x["notes"]]
         if notes:
             print("\n[연도별 표시]")
@@ -367,7 +383,7 @@ def cashflow_cmd(a) -> None:
 
 
 def returns_cmd(a) -> None:
-    """투자기준 3: 주주환원 기록 — 결과만 보여준다 (판정 없음)."""
+    """분석 도구: 주주환원 상세 (자본 배분의 상세 화면) — 결과만 보여준다 (판정 없음)."""
     c = resolve_local(a.query, a.pick)
     cid = c["company_id"]
     if a.fetch and cid.startswith("KR:"):
@@ -375,7 +391,7 @@ def returns_cmd(a) -> None:
         print(f"[DART 주식 수 데이터] {len(dart_shares.missing(cid, ys))}건을 받습니다.")
         dart_shares.fetch(cid, ys)
     r = returns.analyze(cid)
-    print(f"\n=== {c['name']} | {cid} | 기준 3: 주주환원 기록 (최근 5년, 결과만 표시) ===")
+    print(f"\n=== {c['name']} | {cid} | 분석 도구: 주주환원 상세 (최근 5년, 결과만 표시) ===")
     if r["rows"]:
         cur = r["rows"][-1]["currency"] or ("KRW" if cid.startswith("KR:") else "USD")
         unit, div = ("억 원", 1e8) if cur == "KRW" else (f"백만 {cur}", 1e6)
@@ -411,11 +427,11 @@ def returns_cmd(a) -> None:
         print("\n[회사 단위 표시]")
         for fl in r["flags"]:
             print(f"   · {fl}")
-    print("\n   ※ 기준 3은 판정하지 않는다 (결과만 표시)")
+    print("\n   ※ 이 도구는 판정하지 않는다 (결과만 표시)")
 
 
 def quality_cmd(a) -> None:
-    """투자기준 4: 이익의 질 · 이익조정 신호 — 결과만 보여준다 (판정 없음)."""
+    """분석 도구: 이익의 질 · 이익조정 신호 — 결과만 보여준다 (판정 없음)."""
     c = resolve_local(a.query, a.pick)
     cid = c["company_id"]
     if a.fetch:
@@ -429,7 +445,7 @@ def quality_cmd(a) -> None:
             print(f"[SEC 10-K 본문] {len(miss)}건을 받습니다.")
             promises.fetch_docs(cid, miss)
     r = earnings_quality.analyze(cid)
-    print(f"\n=== {c['name']} | {cid} | 기준 4: 이익의 질 · 이익조정 신호 (최근 5년, 결과만 표시) ===")
+    print(f"\n=== {c['name']} | {cid} | 분석 도구: 이익의 질 · 이익조정 신호 (최근 5년, 결과만 표시) ===")
     if not r["rows"]:
         print("표시할 결과가 없습니다.")
     else:
@@ -455,11 +471,11 @@ def quality_cmd(a) -> None:
         print("\n[회사 단위 표시]")
         for fl in r["flags"]:
             print(f"   · {fl}")
-    print("\n   ※ 기준 4는 판정하지 않는다 (결과만 표시). 신호는 의심의 출발점이지 결론이 아니다.")
+    print("\n   ※ 이 도구는 판정하지 않는다 (결과만 표시). 신호는 의심의 출발점이지 결론이 아니다.")
 
 
 def safety_cmd(a) -> None:
-    """투자기준 5: 재무 안전성 — 결과만 보여주고, 분명한 위험 두 가지만 따로 표시."""
+    """분석 도구: 재무 안전성 — 결과만 보여주고, 분명한 위험 두 가지만 따로 표시."""
     c = resolve_local(a.query, a.pick)
     cid = c["company_id"]
     if a.fetch and cid.startswith("KR:"):
@@ -467,7 +483,7 @@ def safety_cmd(a) -> None:
         print(f"[DART 사업보고서 XBRL] {len(miss)}건을 받습니다.")
         dart_xbrl.fetch(cid)
     r = safety.analyze(cid)
-    print(f"\n=== {c['name']} | {cid} | 기준 5: 재무 안전성 (최근 5년, 결과만 표시) ===")
+    print(f"\n=== {c['name']} | {cid} | 분석 도구: 재무 안전성 (최근 5년, 결과만 표시) ===")
     if not r["rows"]:
         print("표시할 결과가 없습니다.")
     else:
@@ -495,7 +511,7 @@ def safety_cmd(a) -> None:
         print("\n[회사 단위 표시]")
         for fl in r["flags"]:
             print(f"   · {fl}")
-    print("\n   ※ 기준 5는 통과선을 두지 않는다 (업종마다 적정 수준이 다름). 같은 업종끼리 비교해서 본다.")
+    print("\n   ※ 이 도구는 통과선을 두지 않는다 (업종마다 적정 수준이 다름). 같은 업종끼리 비교해서 본다.")
 
 
 def allocation_cmd(a) -> None:

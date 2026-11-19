@@ -1,4 +1,4 @@
-"""투자기준 2: 꾸준한 현금 창출 — 결과만 보여준다 (판정하지 않음)
+"""분석 도구: 현금 창출 — 결과만 보여준다 (판정하지 않음)
 
 규칙 문서: criteria/02_꾸준한_현금창출.md
 
@@ -89,6 +89,24 @@ def analyze(company_id: str, years: int = YEARS) -> dict:
         "conv_ge1": sum(1 for r in rows if r["conversion"] is not None and r["conversion"] >= 1),
         "conv_known": sum(1 for r in rows if r["conversion"] is not None),
     }
+    # ---- 내 기준: 영업CF가 꾸준히 늘었나 (프로필 6-①, 숫자 기준 2. 사용자 결정 2026-11-19) ----
+    # 최근 5년(전년 대비 5번) 중 3번 이상 증가 + 5년 연평균 증가율 0% 초과. 감소한 해는 따로, 마이너스인 해는 경고.
+    series = [(y, g(y, "operating_cf")) for y in ([span[0] - 1] + span if span else [])]
+    series = [(y, v) for y, v in series if v is not None]
+    changes = [(b[0], (b[1] - a[1]) / abs(a[1]) if a[1] else None) for a, b in zip(series, series[1:])]
+    ups = sum(1 for _, c in changes if c is not None and c > 0)
+    first, last = (series[0][1], series[-1][1]) if len(series) >= 2 else (None, None)
+    n_years = series[-1][0] - series[0][0] if len(series) >= 2 else 0
+    cagr = (last / first) ** (1 / n_years) - 1 if first and last and first > 0 and last > 0 and n_years else None
+    out["steady"] = {
+        "changes": len(changes), "ups": ups, "cagr": cagr,
+        "decreases": [(y, c) for y, c in changes if c is not None and c < 0],
+        "negatives": [y for y, v in series if v < 0],
+        "ok": (ups >= 3 and cagr > 0) if (len(changes) == 5 and cagr is not None) else None,
+        "why": None if len(changes) == 5 else f"비교할 수 있는 해가 {len(changes)}번뿐 (5번 필요)",
+    }
+    if cagr is None and changes:
+        out["steady"]["why"] = "처음 또는 마지막 해 영업CF가 0 이하 → 연평균 증가율 계산 불가"
     # ---- 회사 단위 표시 ----
     if out["financial"]:
         out["flags"].append("금융업: 영업현금흐름에 예금·대출이 들어가고 설비투자 개념이 달라, 이 지표들의 의미가 일반 기업과 다름")
