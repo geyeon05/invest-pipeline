@@ -32,5 +32,20 @@ def dart_key() -> str:
     return _secret("DART_API_KEY")
 
 
+def naver_keys() -> tuple[str, str]:
+    """네이버 뉴스 검색 API (developers.naver.com 에서 사용자가 발급). .env: NAVER_CLIENT_ID, NAVER_CLIENT_SECRET"""
+    return _secret("NAVER_CLIENT_ID"), _secret("NAVER_CLIENT_SECRET")
+
+
+def ecos_key() -> str:
+    """한국은행 ECOS (ecos.bok.or.kr 에서 사용자가 발급). .env: ECOS_API_KEY"""
+    return _secret("ECOS_API_KEY")
+
+
+def fred_key() -> str:
+    """미국 FRED (fred.stlouisfed.org 에서 사용자가 발급). .env: FRED_API_KEY"""
+    return _secret("FRED_API_KEY")
+
+
 def sec_user_agent() -> str:
     return _secret("SEC_USER_AGENT", "invest-pipeline research-project contact@example.com")

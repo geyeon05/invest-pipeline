@@ -46,6 +46,12 @@
   uv run data.py safety 삼성전자                   # 최근 5년 부채비율·유동비율·당좌비율·이자보상비율·부채/영업CF
   uv run data.py safety 삼성전자 --fetch           # 한국: 이자비용용 사업보고서 XBRL을 받은 뒤 표시 (승인 후)
 
+  정성 자료 (그때그때 보고 싶은 것만)
+  uv run data.py events 삼성전자 [--kinds 경영진,소송제재사고] [--grep …] [--since YYYY-MM-DD]   # 수시공시 이벤트
+  uv run data.py qual 삼성전자 [--topics 해자,수주] [--grep …] [--fetch]   # 사업보고서 정성 부분 원문 발췌
+  uv run data.py news 삼성전자 [--fetch] [--grep …]   # 최근 1개월 뉴스 제목·링크 (네이버 API HUB + Google 뉴스)
+  uv run data.py macro [--fetch]                   # 금리·환율·유가 (ECOS, FRED)
+
   분석 도구: 잠정 가격 판단 PER·PBR (판정 없음, 13~14주차 내재가치 계산 전까지의 비교 기준)
   uv run data.py price 삼성전자 --peers SK하이닉스   # 최근 5년·현재 PER(그해 이익/5년 평균)·PBR + 경쟁사 비교
                                                  # inputs/adjustments/<회사>.json 이 있으면 조정 PBR도 표시
@@ -58,8 +64,8 @@ import sys
 import pandas as pd
 
 from pipeline import (capital_allocation, cashflow, dart_officers, dart_shares, dart_xbrl, documents, earnings_quality,
-                      events, funding, price_level, prices, promises, qualitative, related_party, returns, safety,
-                      service, standard, us_promises)
+                      events, funding, macro, news, price_level, prices, promises, qualitative, related_party,
+                      returns, safety, service, standard, us_promises)
 
 sys.stdout.reconfigure(encoding="utf-8")
 pd.set_option("display.width", 250)
@@ -97,7 +103,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("cmd", choices=["search", "get", "fin", "filings", "profile", "std", "doc", "docs", "promises",
                                    "cashflow", "returns", "quality", "safety", "price", "allocation", "related",
-                                   "events", "qual", "list"])
+                                   "events", "qual", "news", "macro", "list"])
     p.add_argument("query", nargs="?")
     p.add_argument("filter", nargs="?", help="fin: 계정명/태그 일부, filings: 공시명 키워드, doc: 접수번호")
     p.add_argument("--pick", type=int, help="검색 후보 번호")
@@ -121,6 +127,9 @@ def main() -> None:
 
     if a.cmd == "list":
         print(service.collected_companies().to_string(index=False))
+        return
+    if a.cmd == "macro":          # 회사와 상관없는 명령
+        macro_cmd(a)
         return
     if not a.query:
         p.error("기업명 또는 티커를 입력하세요.")
@@ -153,6 +162,12 @@ def main() -> None:
         return
     if a.cmd == "qual":
         qual_cmd(a)
+        return
+    if a.cmd == "news":
+        news_cmd(a)
+        return
+    if a.cmd == "macro":
+        macro_cmd(a)
         return
     if a.cmd == "search":
         results, warnings = service.search(a.query)
@@ -670,6 +685,47 @@ def qual_cmd(a) -> None:
     more = "" if a.full else " (최대 30곳. 전부 보려면 --full)"
     print(f"\n   {len(hits)}곳{more}. 출처: {f['title']}, 접수번호 {f['rcept_no']}")
     print("   절 전체를 보려면: uv run data.py doc <기업> <접수번호> --section <제목 일부>")
+
+
+def news_cmd(a) -> None:
+    """뉴스: 최근 1개월 제목·언론사·날짜·링크만 (요약 없음)."""
+    c = resolve_local(a.query, a.pick)
+    cid = c["company_id"]
+    if a.fetch:
+        news.fetch(cid)
+    rows = news.load(cid)
+    if a.grep:
+        import re as _re
+        rows = [r for r in rows if _re.search(a.grep, r["title"], _re.I)]
+    print(f"\n=== {c['name']} | {cid} | 뉴스 (최근 {news.DAYS}일, 제목·링크만, 검색어 '{news.query_for(cid)}') ===")
+    if not rows:
+        print("받아 둔 기사가 없습니다. 받으려면 승인 후: uv run data.py news <기업> --fetch")
+        return
+    print(f"(받은 날: {rows[0]['fetched']}, 출처: Google 뉴스 RSS · 네이버 뉴스 검색 API)\n")
+    for r in rows[: (None if a.full else 40)]:
+        print(f"   {r['date']:%Y-%m-%d}  [{r['source'][:16]}] {r['title'][:90]}")
+        print(f"              {r['link']}")
+    more = "" if a.full or len(rows) <= 40 else f" (처음 40건만. 전부 보려면 --full)"
+    print(f"\n   {len(rows)}건{more}. 같은 제목은 하나로 합침. --grep 으로 제목 거르기")
+    print("   ※ 판단은 공시로 한다 (프로필 2번). 기사가 공시와 연결되는지는 events 로 확인")
+
+
+def macro_cmd(a) -> None:
+    """거시 지표: 금리·환율·유가 (판정 없음, 살 시점 참고용)."""
+    if a.fetch:
+        macro.fetch()
+    print("\n=== 거시 지표 (2주차 6번: 살 시점 참고용, 판정 없음) ===\n")
+    print(f"   {'지표':<26} {'최근':>18} {'1년 전':>9} {'5년 최저~최고':>18}  출처")
+    for r in macro.load():
+        if not r["points"]:
+            print(f"   {r['name']:<26} {'받지 않음':>18}  ({r['source']} {r['code']})")
+            continue
+        d, v = r["last"]
+        ya = "-" if r["year_ago"] is None else f"{r['year_ago']:,.2f}"
+        last = f"{v:,.2f} ({d})"
+        rng = f"{r['low']:,.2f}~{r['high']:,.2f}"
+        print(f"   {r['name']:<26} {last:>18} {ya:>9} {rng:>18}  {r['source']} {r['code']} ({r['unit']})")
+    print("\n   받으려면 승인 후: uv run data.py macro --fetch  (키: .env 의 ECOS_API_KEY, FRED_API_KEY)")
 
 
 def related_cmd(a) -> None:

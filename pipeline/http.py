@@ -7,8 +7,9 @@ from .config import sec_user_agent
 _session = requests.Session()
 
 
-def get(url: str, params: dict | None = None, sec: bool = False, retries: int = 3) -> requests.Response:
-    headers = {"User-Agent": sec_user_agent(), "Accept-Encoding": "gzip, deflate"} if sec else {}
+def get(url: str, params: dict | None = None, sec: bool = False, retries: int = 3,
+        headers: dict | None = None) -> requests.Response:
+    headers = {**({"User-Agent": sec_user_agent(), "Accept-Encoding": "gzip, deflate"} if sec else {}), **(headers or {})}
     for attempt in range(retries):
         resp = _session.get(url, params=params, headers=headers, timeout=60)
         if resp.status_code in (429, 503) and attempt < retries - 1:
