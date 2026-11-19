@@ -707,18 +707,21 @@ def news_cmd(a) -> None:
           + (f" | 산업·경쟁 검색어 {extra}" if extra else ""))
     limit = None if a.full else 15
 
-    def show(title, rows, note):
+    name = news.query_for(cid)
+
+    def show(title, rows, note, min_sources=news.MIN_SOURCES, drop=None):
         if a.grep:
             rows = [r for r in rows if _re.search(a.grep, r["title"], _re.I)]
-        print(f"\n[{title}] {len(rows)}건  — {note}")
-        for r in rows[:limit]:
-            print(f"   {r['date']:%Y-%m-%d}  [{r['source'][:14]}] {r['title'][:88]}")
-            print(f"              {r['link']}")
-        if limit and len(rows) > limit:
-            print(f"   … 처음 {limit}건만. 전부 보려면 --full")
+        ev = news.events_of(rows, min_sources, drop or {name})
+        print(f"\n[{title}] {len(ev)}개 사건 (기사 {len(rows)}건에서)  — {note}")
+        for e in ev[:limit]:
+            print(f"   {e['date']:%Y-%m-%d}  {len(e['sources'])}곳 {e['n']}건  {e['title'][:80]}")
+            print(f"              {e['link']}")
+        if limit and len(ev) > limit:
+            print(f"   … 처음 {limit}개만. 전부 보려면 --full")
 
     show("(가) 사건", g["사건"], "공시와 연결되는지 events 로 확인")
-    show("(나) 분위기·시황", g["분위기·시황"], "주가·시황 기사")
+    show("(나) 분위기·시황", g["분위기·시황"], "주가·시황 기사 (2곳 규칙 없이 같은 기사만 묶음)", min_sources=1)
     print("   주별 회사 기사 수 (Google / 네이버):  "
           + "  ".join(f"{w} {gg}/{nn}" for w, gg, nn in news.weekly_counts(g["all_own"])))
     print("   ※ 기사 수로는 추세를 판단할 수 없음: 네이버는 최대 1,000건(큰 회사는 최근 며칠), Google RSS는 관련도 순 약 100건")
@@ -733,11 +736,13 @@ def news_cmd(a) -> None:
     elif cid.startswith("KR:"):
         print("   네이버 검색어 트렌드: 받지 않음 (애플리케이션에 '검색어 트렌드' API를 켠 뒤 --fetch)")
     if extra:
-        show("(다) 산업·경쟁", g["산업·경쟁"], "경쟁사 이름·산업 낱말이 제목에 있는 기사")
+        show("(다) 산업·경쟁", g["산업·경쟁"], "경쟁사 이름·산업 낱말이 제목에 있는 기사", drop=set(extra))
     else:
         print("\n[(다) 산업·경쟁] 검색어 없음. 경쟁사 이름·산업 낱말을 주면 따로 받음 (승인 후): "
               "--fetch --terms \"SK하이닉스,HBM,메모리 가격\"")
-    print("\n   ※ 판단은 공시로 한다 (프로필 2번). 뉴스는 시야를 넓히는 데 쓴다")
+    print(f"\n   ※ 줄이기: 광고·홍보성 기사 뺌, 제목 낱말 {news.SAME_EVENT:.0%} 이상 겹치고 {news.SAME_DAYS}일 안이면 한 사건, "
+          f"{news.MIN_SOURCES}곳 이상 언론사가 다룬 사건만 (시황은 묶기만). 언론사는 주소로 통일")
+    print("   ※ 판단은 공시로 한다 (프로필 2번). 뉴스는 시야를 넓히는 데 쓴다")
 
 
 def macro_cmd(a) -> None:

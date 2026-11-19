@@ -130,9 +130,11 @@ def load_query(company_id: str, q: str) -> list[dict]:
             source = src.text if src is not None else ""
             if source and title.endswith(f" - {source}"):
                 title = title[: -len(source) - 3]
+            # 언론사는 Google이 주는 언론사 주소(source url)로 → 네이버 기사 주소와 같은 기준으로 맞춤
+            outlet = _outlet(src.get("url")) if src is not None and src.get("url") else source
             out.append({"date": email.utils.parsedate_to_datetime(it.findtext("pubDate")), "title": title,
-                        "source": source, "link": it.findtext("link"), "from": "Google", "fetched": g.stem[-8:],
-                        "query": q})
+                        "source": source, "outlet": outlet, "link": it.findtext("link"), "from": "Google",
+                        "fetched": g.stem[-8:], "query": q})
     n = _latest(d, "naver", slug)
     if n is None and q == query_for(company_id):
         old = sorted(d.glob("naver_[0-9]*.json"))
@@ -142,7 +144,8 @@ def load_query(company_id: str, q: str) -> list[dict]:
             link = it.get("originallink") or it.get("link")
             host = re.sub(r"^https?://(www\.)?", "", link or "").split("/")[0]
             out.append({"date": email.utils.parsedate_to_datetime(it["pubDate"]), "title": _strip(it.get("title")),
-                        "source": host, "link": link, "from": "네이버", "fetched": n.stem[-8:], "query": q})
+                        "source": host, "outlet": _outlet(link), "link": link, "from": "네이버",
+                        "fetched": n.stem[-8:], "query": q})
     cutoff = datetime.now(timezone.utc) - timedelta(days=DAYS)
     seen, uniq = set(), []
     for a in sorted(out, key=lambda a: a["date"], reverse=True):
@@ -200,7 +203,7 @@ def weekly_counts(articles: list[dict]) -> list[tuple[str, int, int]]:
 
 # 주가·시황 기사 (AI가 정한 값: criteria/README.md)
 MARKET = re.compile(r"주가|특징주|코스피|코스닥|외국인|기관|순매수|순매도|시총|시가총액|급등|급락|상승세|하락세|강세|약세|"
-                    r"장중|마감|목표주가|52주|신고가|신저가|공매도|ETF|보합|내려|올라|하락|상승|\d+(\.\d+)?\s*%|\bshares?\b|\bstock\b|rall(y|ies)|tumbl|soar|slump|"
+                    r"장중|마감|목표주가|52주|신고가|신저가|공매도|ETF|보합|내려|올라|하락|상승|\d+(\.\d+)?\s*%\s*(상승|하락|올|내|↑|↓|급)|\bshares?\b|\bstock\b|rall(y|ies)|tumbl|soar|slump|"
                     r"price target", re.I)
 
 
@@ -249,3 +252,85 @@ def load_trend(company_id: str) -> dict | None:
         res = (raw.get(unit) or {}).get("results") or [{}]
         out[unit] = [(x["period"], float(x["ratio"])) for x in res[0].get("data", [])]
     return out
+
+
+# ---------------- 줄이기 (사용자 결정 2026-11-19) ----------------
+# 1) 광고성 기사 빼기 (b): 노골적인 광고 + 신제품·행사 홍보성 기사.
+#    '공개'·'페스티벌'은 빼고, '[단독]' 기사는 낱말에 걸려도 남김 (사용자 결정 a)
+# 2) 같은 사건 기사 묶기: 제목 낱말이 35% 이상 겹치고 2일 안이면 한 사건 (중간)
+#    + 같은 날 제목에 '고유한 낱말'이 2개 이상 겹치면 한 사건 (사용자 결정 b)
+# 3) 2곳 이상의 언론사가 다룬 사건만. 단 (나) 분위기·시황은 이 규칙 없이 묶기만 (사용자 결정 b), [단독] 기사는 1곳이어도 남김
+# 4) 언론사는 주소(도메인)로 통일 (Google 언론사 주소 = 네이버 기사 주소)
+# 낱말 목록, 고유한 낱말 판단, 조사 떼기, 도메인 통일 방식은 AI가 정한 값 (criteria/README.md)
+AD = re.compile(r"\[(광고|AD|PR|협찬|후원|홍보)\]|광고\)|이벤트|경품|할인|특가|프로모션|쿠폰|증정|사은품|체험단|기획전|"
+                r"얼리버드|최대\s*\d+%\s*(할인|혜택)|무료\s*(종목|추천|상담)|리딩방|급등주|"
+                r"출시|사전\s*예약|캠페인|수상|기념|론칭|런칭|행사|팝업|전시회|박람회|오픈|선보|신제품|"
+                r"Sponsored|Promo|discount|giveaway|launch|unveil", re.I)
+KEEP = re.compile(r"\[단독\]|\bexclusive\b", re.I)
+SAME_EVENT = 0.35
+SAME_DAYS = 2
+MIN_SOURCES = 2
+DISTINCT_SHARE = 0.10   # 전체 제목의 10% 이하에만 나오는 낱말 = 고유한 낱말
+DISTINCT_MIN = 2
+_JOSA = re.compile(r"(으로|에서|에게|까지|부터|이다|이며|은|는|이|가|을|를|의|에|도|로|와|과|만)$")
+_SLD = {"co", "or", "go", "ne", "ac", "re", "pe", "com", "net", "org"}
+
+
+def _outlet(url: str | None) -> str:
+    """언론사 주소 → 등록 도메인 (news.hankyung.com, www.hankyung.com → hankyung.com; biz.chosun.com → chosun.com)."""
+    host = re.sub(r"^https?://", "", url or "").split("/")[0].split(":")[0].lower()
+    parts = [p for p in host.split(".") if p]
+    if len(parts) >= 3 and parts[-2] in _SLD and len(parts[-1]) == 2:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+def is_ad(title: str) -> bool:
+    return bool(AD.search(title)) and not KEEP.search(title)
+
+
+def _tokens(t: str) -> set[str]:
+    t = re.sub(r"\[[^\]]*\]|\([^)]*\)|[“”\"'‘’…·,.!?:;~/]", " ", t)
+    out = set()
+    for w in re.split(r"\s+", t):
+        w = _JOSA.sub("", w) if len(w) >= 3 else w
+        if len(w) >= 2:
+            out.add(w.lower())
+    return out
+
+
+def events_of(rows: list[dict], min_sources: int = MIN_SOURCES, drop: set[str] | None = None) -> list[dict]:
+    """광고성 기사를 빼고 같은 사건을 묶은 뒤, min_sources곳 이상이 다룬 사건만.
+    drop: 고유한 낱말에서 뺄 낱말 (회사 이름 등)."""
+    rows = [r for r in rows if not is_ad(r["title"])]
+    toks = [_tokens(r["title"]) for r in rows]
+    df = {}
+    for tk in toks:
+        for w in tk:
+            df[w] = df.get(w, 0) + 1
+    cap = max(2, int(len(rows) * DISTINCT_SHARE))
+    drop = {w.lower() for w in (drop or set())}
+    groups = []
+    for a, tk in sorted(zip(rows, toks), key=lambda x: x[0]["date"]):
+        distinct = {w for w in tk if df[w] <= cap and w not in drop and not any(d in w for d in drop)}
+
+        def same(g):
+            if abs((a["date"] - g["date"]).days) > SAME_DAYS:
+                return False
+            if len(tk & g["tk"]) / max(1, len(tk | g["tk"])) >= SAME_EVENT:
+                return True
+            return a["date"].date() == g["day"] and len(distinct & g["distinct"]) >= DISTINCT_MIN
+
+        hit = next((g for g in groups if same(g)), None)
+        if hit:
+            hit["articles"].append(a)
+        else:
+            groups.append({"title": a["title"], "date": a["date"], "day": a["date"].date(), "link": a["link"],
+                           "tk": tk, "distinct": distinct, "articles": [a]})
+    out = []
+    for g in groups:
+        srcs = {x.get("outlet") or x["source"] for x in g["articles"] if x.get("outlet") or x["source"]}
+        if len(srcs) >= min_sources or any(KEEP.search(x["title"]) for x in g["articles"]):
+            out.append({"title": g["title"], "date": g["date"], "link": g["link"], "sources": sorted(srcs),
+                        "n": len(g["articles"]), "last": max(x["date"] for x in g["articles"])})
+    return sorted(out, key=lambda e: e["last"], reverse=True)
