@@ -28,7 +28,11 @@
   uv run data.py cashflow 삼성전자 [--source]      # 최근 5년 영업CF·FCF·현금 전환율 + 표시
 
   분석 도구: 자본 배분 (번 돈을 어디에 썼고 결과가 어땠나, 판정 없음, 외부 요청 없음)
-  uv run data.py allocation 삼성전자               # 영업CF·설비 재투자·FCF·주주환원·부채 증감·ROE + 의도를 논의할 사실 5가지
+  uv run data.py allocation 삼성전자               # 영업CF·설비 재투자·FCF·주주환원·부채 증감·ROE·스프레드 + 의도를 논의할 사실 5가지
+
+  분석 도구: 특수관계자 거래 (한국, 사업보고서 XBRL 주석, 판정 없음)
+  uv run data.py related 삼성전자                  # 거래 상대 목록 ('후보'·'?' 표시)
+  uv run data.py related 삼성전자 --owner 1,3      # 대주주 쪽으로 판단한 상대를 기록 → 매입 ÷ 매출 계산
 
   분석 도구: 주주환원 상세 (자본 배분의 상세 화면) (결과만 보여줌, 판정 없음)
   uv run data.py returns 삼성전자 [--source]       # 최근 5년 배당·자사주·소각·환원 비율·주식 수 (외부 요청 없음)
@@ -44,6 +48,7 @@
 
   분석 도구: 잠정 가격 판단 PER·PBR (판정 없음, 13~14주차 내재가치 계산 전까지의 비교 기준)
   uv run data.py price 삼성전자 --peers SK하이닉스   # 최근 5년·현재 PER(그해 이익/5년 평균)·PBR + 경쟁사 비교
+                                                 # inputs/adjustments/<회사>.json 이 있으면 조정 PBR도 표시
   uv run data.py price 삼성전자 --fetch            # 주가(Yahoo Finance)·한국 주식 수(DART)를 받은 뒤 표시 (승인 후)
 """
 import argparse
@@ -53,7 +58,8 @@ import sys
 import pandas as pd
 
 from pipeline import (capital_allocation, cashflow, dart_officers, dart_shares, dart_xbrl, documents, earnings_quality,
-                      funding, price_level, prices, promises, returns, safety, service, standard, us_promises)
+                      funding, price_level, prices, promises, related_party, returns, safety, service, standard,
+                      us_promises)
 
 sys.stdout.reconfigure(encoding="utf-8")
 pd.set_option("display.width", 250)
@@ -90,7 +96,8 @@ def print_candidates(results: list[dict]) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("cmd", choices=["search", "get", "fin", "filings", "profile", "std", "doc", "docs", "promises",
-                                   "cashflow", "returns", "quality", "safety", "price", "allocation", "list"])
+                                   "cashflow", "returns", "quality", "safety", "price", "allocation", "related",
+                                   "list"])
     p.add_argument("query", nargs="?")
     p.add_argument("filter", nargs="?", help="fin: 계정명/태그 일부, filings: 공시명 키워드, doc: 접수번호")
     p.add_argument("--pick", type=int, help="검색 후보 번호")
@@ -102,6 +109,7 @@ def main() -> None:
     p.add_argument("--full", action="store_true", help="doc: 전체 텍스트 출력")
     p.add_argument("--fetch", action="store_true", help="promises: 아직 받지 않은 공시 본문을 받는다 (사용자 승인 후)")
     p.add_argument("--peers", help="price: 비교할 경쟁사 (쉼표로 구분, 받아 둔 기업 이름)")
+    p.add_argument("--owner", help="related: 대주주 쪽으로 판단한 거래 상대 번호 (쉼표로 구분, 사용자 판단을 기록)")
     p.add_argument("--attribute", choices=["plan", "result"], default="result",
                    help="promises: 현 대표이사의 기록을 결과 시점(result, 기본·사용자 결정 2026-11-18)/약속 시점(plan) 대표이사로 볼지")
     a = p.parse_args()
@@ -131,6 +139,9 @@ def main() -> None:
         return
     if a.cmd == "allocation":
         allocation_cmd(a)
+        return
+    if a.cmd == "related":
+        related_cmd(a)
         return
     if a.cmd == "search":
         results, warnings = service.search(a.query)
@@ -507,6 +518,10 @@ def safety_cmd(a) -> None:
             print(f"   ● {y}: {t}")
     else:
         print("   없음")
+    if r.get("spread_warn"):
+        print("\n[경고: 스프레드 마이너스 = 빚이 독이 되는 해 (9-②)]  자세한 숫자: uv run data.py allocation <기업>")
+        for y, v in r["spread_warn"]:
+            print(f"   ● {y}: 스프레드 {v:+.1%} (ROA가 이자율보다 낮음)")
     if r["flags"]:
         print("\n[회사 단위 표시]")
         for fl in r["flags"]:
@@ -539,6 +554,16 @@ def allocation_cmd(a) -> None:
     print("   ROE = 연결 순이익 ÷ 평균 자본총계. 재투자는 설비만 (인수·지분 투자 제외)")
 
     fa = r["facts"]
+    print("\n[ROE를 인정하나: 스프레드 = ROA − 이자율 (9-②, 플러스일 때만 빚으로 높인 ROE를 인정)]")
+    print(f"{'연도':>5} {'ROE':>7} {'ROA(영업)':>10} {'이자율':>7} {'스프레드':>9}")
+    p1 = lambda v: "-" if v is None else f"{v:.1%}"  # noqa: E731
+    for x in rows:
+        mark = "" if x.get("spread") is None else ("  ● 마이너스" if x["spread"] < 0 else "")
+        why = f"  ({x['why']})" if x.get("why") else ""
+        sp = "-" if x.get("spread") is None else f"{x['spread']:+.1%}"
+        print(f"{x['year']:>5} {p1(x['roe']):>7} {p1(x.get('roa_op')):>10} {p1(x.get('rate')):>7} {sp:>9}{mark}{why}")
+    print("   ROA = 영업이익 ÷ 평균 총자산, 이자율 = 이자비용 ÷ 평균 이자부 부채 (리스 포함은 회사가 보고한 그대로)")
+    print("   이자율이 비정상적으로 낮거나 높으면 이자비용과 부채의 범위가 다를 수 있음 → 분석할 때 판단 (예: 금융 자회사)")
     print("\n[의도를 논의할 때 쓸 사실]")
     pe = fa["persistence"]
     print(f" ① 환원이 이어진 해: {pe['n']}/{pe['of']}년  (배당 {pe['div_years'] or '없음'}, 자사주 매입 {pe['buy_years'] or '없음'})")
@@ -570,6 +595,46 @@ def allocation_cmd(a) -> None:
         for fl in r["flags"]:
             print(f"   · {fl}")
     print("\n   ※ 판정하지 않는다. 주주환원의 의도는 회사마다 논의해서 판단한다 (프로필 4-2).")
+
+
+def related_cmd(a) -> None:
+    """특수관계자 거래 목록 (7-④): 대주주 쪽 매입 ÷ 매출. 대주주 쪽인지는 사용자가 고른다."""
+    c = resolve_local(a.query, a.pick)
+    cid = c["company_id"]
+    print(f"\n=== {c['name']} | {cid} | 특수관계자 거래 (사업보고서 XBRL 주석, 연결, 판정 없음) ===")
+    if not cid.startswith("KR:"):
+        print("한국 기업만 지원합니다 (미국 10-K는 특수관계자 거래가 구조화된 숫자로 거의 없음).")
+        return
+    cps = related_party.counterparties(cid)
+    if not cps:
+        print("특수관계자 거래 숫자가 없습니다. 사업보고서 XBRL(2022년 이후)을 받았는지 확인하세요: "
+              "uv run data.py safety <기업> --fetch (승인 필요)")
+        return
+    if a.owner:
+        idx = [int(x) for x in a.owner.split(",") if x.strip().isdigit()]
+        picks = [cps[i - 1] for i in idx if 1 <= i <= len(cps)]
+        p = related_party.save_owner_side(cid, picks)
+        print(f"[기록] 대주주 쪽으로 고른 상대 {len(picks)}곳을 저장했습니다: {p}")
+    saved = related_party.load_owner_side(cid) or {}
+    chosen = {x["member"] for x in saved.get("owner_side", [])}
+    ly = cps[0]["last_year"]
+    eok = lambda v: "-" if not v else f"{v / 1e8:,.0f}"  # noqa: E731
+    print(f"(금액: {ly}년, 억 원. '후보' = 회사가 지배기업·기업집단 계열사·유의적 영향력 행사 기업으로 분류, "
+          f"'?' = 회사가 분류를 붙이지 않음 (지배회사일 수도 있음). 확정은 직접)\n")
+    print(f"{'번호':>4}  {'':4} {'분류':<14} {'거래 상대':<28} {'매입·비용':>10} {'매출·수익':>10} {'자산 거래':>9}")
+    for i, x in enumerate(cps, 1):
+        mark = "선택" if x["member"] in chosen else ("후보" if x["owner_hint"] else ("?" if x["category"] == "미분류" else ""))
+        lst = x["last"]
+        print(f"{i:>4}  {mark:4} {x['category'][:12]:<14} {x['name'][:26]:<28} {eok(lst.get('매입')):>10} "
+              f"{eok(lst.get('매출')):>10} {eok(lst.get('자산')):>9}")
+    if chosen:
+        print(f"\n[대주주 쪽 매입 ÷ 매출]  (기록: {saved.get('decided')}, {len(chosen)}곳)")
+        for r in related_party.ratios(cid, list(chosen)):
+            rt = "-" if r["ratio"] is None else f"{r['ratio']:.2%}"
+            print(f"   {r['year']}: 매입 {eok(r['purchase'])}억 ÷ 매출 {eok(r['revenue'])}억 = {rt}")
+    else:
+        print("\n대주주 쪽 상대를 고르면 비율이 계산됩니다: uv run data.py related <기업> --owner 1,3,5")
+    print("\n   ※ 주의 기준(%)은 분석할 때 판단한다 (숫자 기준 3). '기타'로 묶인 상대는 구성을 알 수 없다.")
 
 
 def price_cmd(a) -> None:
@@ -605,6 +670,18 @@ def price_cmd(a) -> None:
         if cur:
             print(f"{'현재':>7} {str(cur['date']):>11} {num(cur['price']):>11} {x(cur['per']):>10} {x(cur['per_avg']):>12} "
                   f"{x(cur['pbr']):>7}  ({cur['basis_year']}회계연도 이익·장부가치 기준)")
+        adj = r.get("adjustments") or {}
+        if adj.get("error"):
+            print(f"\n[조정 장부가치] {adj['error']} ({adj['path']})")
+        elif adj.get("items") and cur and cur.get("adj_pbr") is not None:
+            print(f"\n[조정 장부가치 (4-①, 직접 입력한 항목)]  {adj['path']}")
+            for it in adj["items"]:
+                print(f"   {'+' if it['signed'] >= 0 else '−'} {num(abs(it['signed']))}  {it.get('name', '')}"
+                      f"  | 이유: {it.get('reason', '-')} | 출처: {it.get('source', '-')} | 기준일: {it.get('as_of', '-')}")
+            print(f"   주당 장부가치 {num(cur['bps'])} → {num(cur['adj_bps'])}  |  PBR {x(cur['pbr'])} → 조정 PBR {x(cur['adj_pbr'])}")
+            print("   ※ 세금 효과는 반영하지 않음 (입력한 금액 그대로)")
+        elif cur:
+            print(f"\n[조정 장부가치] 입력 없음. 수치화되는 장부 밖 가치가 있으면 {adj.get('path')} 에 적으면 조정 PBR이 계산됨")
         notes = [(w["year"], t) for w in r["rows"] for t in w["notes"]]
         if notes:
             print("\n[연도별 표시]")

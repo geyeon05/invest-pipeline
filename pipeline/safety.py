@@ -15,6 +15,7 @@
 import pandas as pd
 
 from . import service
+from . import spread as SP
 from . import standard as S
 
 YEARS = 5
@@ -82,4 +83,8 @@ def analyze(company_id: str, years: int = YEARS) -> dict:
     bad = chk[(chk["check"] == "자산 = 부채 + 자본") & ~chk["ok"] & chk["year"].isin(span)]
     for r in bad.itertuples():
         out["flags"].append(f"{r.year}: 자산 ≠ 부채 + 자본 ({r.detail}) → 매핑 확인 필요")
+    # 스프레드 마이너스 = 빚이 독이 되는 해 (9-②). 숫자는 자본 배분 화면, 여기에는 경고만 (사용자 결정 2026-11-19)
+    if not fin:
+        out["spread_warn"] = [(y, v["spread"]) for y, v in SP.by_year(df, span).items()
+                              if v["spread"] is not None and v["spread"] < 0]
     return out

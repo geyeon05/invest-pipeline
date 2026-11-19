@@ -13,6 +13,7 @@ import pandas as pd
 from . import dart_shares, prices, service
 from . import promises as P
 from . import returns as R
+from . import spread as SP
 from . import standard as S
 from . import us_promises as U
 
@@ -35,6 +36,11 @@ def analyze(company_id: str, years: int = YEARS) -> dict:
     span = [y for y in sorted(val.index) if g(y, "operating_cf") is not None][-years:]
     kr = company_id.startswith("KR:")
     ret = {x["year"]: x for x in R.analyze(company_id, years)["rows"]}
+    spr = SP.by_year(df, span)
+    if S.is_financial(service.get_company(company_id) or {}):
+        # 금융업: 이자비용이 예금이자(영업비용)라 스프레드의 뜻이 다르다 → 계산하지 않음 (재무 안전성과 같은 원칙)
+        spr = {y: {"roa_op": None, "rate": None, "spread": None, "why": "금융업: 이자비용이 영업비용이라 계산 안 함"}
+               for y in span}
 
     for y in span:
         ocf = g(y, "operating_cf")
@@ -50,8 +56,10 @@ def analyze(company_id: str, years: int = YEARS) -> dict:
                             "dividends": r.get("dividends"), "buyback": r.get("buyback_net"),
                             "left": fcf - payout if fcf is not None and payout is not None else None,
                             "debt_change": d1 - d0 if d1 is not None and d0 is not None else None, "roe": roe,
-                            "currency": r.get("currency") or ""})
+                            "currency": r.get("currency") or "", **spr.get(y, {})})
     rows = out["rows"]
+    # 9-②: 빚으로 높인 ROE는 스프레드가 플러스일 때만 인정
+    out["facts"]["spread_negative"] = [x["year"] for x in rows if x.get("spread") is not None and x["spread"] < 0]
 
     # ① 지속성
     pay_years = [x["year"] for x in rows if x["payout"]]

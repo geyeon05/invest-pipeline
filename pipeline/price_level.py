@@ -10,8 +10,10 @@
 - 비교는 경쟁사 우선, 자기 과거는 보조. 경쟁사는 분석할 때 직접 고른다.
 - 판정하지 않는다. 숫자와 사실만 보여준다.
 """
+import json
 import sqlite3
 from functools import lru_cache
+from pathlib import Path
 
 import pandas as pd
 
@@ -20,6 +22,33 @@ from . import standard as S
 from .config import DB_PATH
 
 YEARS = 5
+
+
+ADJ_DIR = Path(__file__).resolve().parent.parent / "inputs" / "adjustments"
+
+
+def adjustment_path(company_id: str) -> Path:
+    return ADJ_DIR / f"{company_id.replace(':', '_')}.json"
+
+
+def load_adjustments(company_id: str) -> dict:
+    """조정 장부가치 입력 파일 (회사마다 한 파일, 사용자가 분석할 때 작성. 항목 종류는 정해 두지 않음).
+    형식: {"items": [{"name": "수주잔고 이익", "amount": 1200000000000, "sign": "+", "reason": "...",
+                      "source": "사업보고서 2025, 접수번호 …, II.4 수주상황", "as_of": "2025-12-31"}]}
+    금액은 재무제표와 같은 통화의 원 단위. 세금 효과는 반영하지 않고 입력한 금액 그대로 쓴다 (필요하면 세후 금액을 입력)."""
+    p = adjustment_path(company_id)
+    if not p.exists():
+        return {"path": str(p), "items": [], "error": None}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        items = []
+        for it in data.get("items", []):
+            amt = float(it["amount"])
+            sign = -1 if str(it.get("sign", "+")).strip() in ("-", "빼기", "minus") else 1
+            items.append({**it, "signed": sign * abs(amt)})
+        return {"path": str(p), "items": items, "error": None}
+    except (ValueError, KeyError, TypeError) as e:
+        return {"path": str(p), "items": [], "error": f"입력 파일을 읽지 못함: {e}"}
 
 
 @lru_cache(maxsize=4096)
@@ -142,6 +171,16 @@ def analyze(company_id: str, years: int = YEARS) -> dict:
         out["current"] = {"date": last_day.date(), "price": last_px, "basis_year": y, "per": per, "eps": e,
                           "per_avg": per_avg, "eps_avg": avg, "n_avg": n, "bps": bps,
                           "pbr": last_px / bps if bps and bps > 0 else None, "why": why}
+        # 조정 장부가치 (4-①: 수치화되는 장부 밖 가치를 반영. 항목은 사용자가 분석할 때 입력)
+        adj = load_adjustments(company_id)
+        if adj["items"] and bps:
+            eq = g("equity_parent", y)
+            total = sum(it["signed"] for it in adj["items"])
+            if eq is not None and pd.notna(eq.value) and eq.value:
+                adj_bps = bps * (eq.value + total) / eq.value      # 같은 주식 수 기준으로 자본만 조정
+                out["current"].update({"adj_total": total, "adj_bps": adj_bps,
+                                       "adj_pbr": last_px / adj_bps if adj_bps > 0 else None})
+        out["adjustments"] = adj
     if bad_eps:
         out["flags"].append(f"주당순이익 검증 실패로 제외한 해: {sorted(bad_eps)} "
                             "(주당순이익 × 주식 수가 지배주주 순이익과 10배 넘게 어긋남 → 원본 단위 오류 등)")
