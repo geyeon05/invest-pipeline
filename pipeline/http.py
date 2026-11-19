@@ -7,6 +7,12 @@ from .config import sec_user_agent
 _session = requests.Session()
 
 
+def post_json(url: str, body: dict, headers: dict | None = None) -> requests.Response:
+    resp = _session.post(url, json=body, headers={"Content-Type": "application/json", **(headers or {})}, timeout=60)
+    resp.raise_for_status()
+    return resp
+
+
 def get(url: str, params: dict | None = None, sec: bool = False, retries: int = 3,
         headers: dict | None = None) -> requests.Response:
     headers = {**({"User-Agent": sec_user_agent(), "Accept-Encoding": "gzip, deflate"} if sec else {}), **(headers or {})}

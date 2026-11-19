@@ -118,6 +118,7 @@ def main() -> None:
     p.add_argument("--owner", help="related: 대주주 쪽으로 판단한 거래 상대 번호 (쉼표로 구분, 사용자 판단을 기록)")
     p.add_argument("--kinds", help="events: 볼 분류 (쉼표로 구분, 예: 경영진,소송제재사고). 없으면 메뉴와 건수")
     p.add_argument("--topics", help="qual: 볼 주제 (쉼표로 구분, 예: 해자,수주). 없으면 메뉴")
+    p.add_argument("--terms", help="news: 산업·경쟁 검색어 (쉼표로 구분, 경쟁사 이름·산업 낱말. 예: SK하이닉스,HBM)")
     p.add_argument("--since", help="events: 시작일 YYYY-MM-DD (기본: 1년 전)")
     p.add_argument("--no-sub", action="store_true", help="events: 자회사·종속회사 공시 빼기")
     p.add_argument("--frequent", action="store_true", help="events: 잦은 지분 변동 공시(최대주주등소유주식변동신고서 등)도 넣기")
@@ -689,25 +690,54 @@ def qual_cmd(a) -> None:
 
 def news_cmd(a) -> None:
     """뉴스: 최근 1개월 제목·언론사·날짜·링크만 (요약 없음)."""
+    import re as _re
     c = resolve_local(a.query, a.pick)
     cid = c["company_id"]
+    extra = [t.strip() for t in (a.terms or "").split(",") if t.strip()]
     if a.fetch:
-        news.fetch(cid)
-    rows = news.load(cid)
-    if a.grep:
-        import re as _re
-        rows = [r for r in rows if _re.search(a.grep, r["title"], _re.I)]
-    print(f"\n=== {c['name']} | {cid} | 뉴스 (최근 {news.DAYS}일, 제목·링크만, 검색어 '{news.query_for(cid)}') ===")
-    if not rows:
-        print("받아 둔 기사가 없습니다. 받으려면 승인 후: uv run data.py news <기업> --fetch")
+        news.fetch(cid, extra)
+        if cid.startswith("KR:"):
+            news.fetch_trend(cid)
+    g = news.grouped(cid, extra)
+    print(f"\n=== {c['name']} | {cid} | 뉴스 (최근 {news.DAYS}일, 제목·링크만, 요약 없음) ===")
+    if not g["all_own"] and not g["산업·경쟁"]:
+        print("받아 둔 기사가 없습니다. 받으려면 승인 후: uv run data.py news <기업> --fetch [--terms 경쟁사,산업낱말]")
         return
-    print(f"(받은 날: {rows[0]['fetched']}, 출처: Google 뉴스 RSS · 네이버 뉴스 검색 API)\n")
-    for r in rows[: (None if a.full else 40)]:
-        print(f"   {r['date']:%Y-%m-%d}  [{r['source'][:16]}] {r['title'][:90]}")
-        print(f"              {r['link']}")
-    more = "" if a.full or len(rows) <= 40 else f" (처음 40건만. 전부 보려면 --full)"
-    print(f"\n   {len(rows)}건{more}. 같은 제목은 하나로 합침. --grep 으로 제목 거르기")
-    print("   ※ 판단은 공시로 한다 (프로필 2번). 기사가 공시와 연결되는지는 events 로 확인")
+    print(f"회사 검색어 '{news.query_for(cid)}' (제목에 이 이름이 있는 기사만)"
+          + (f" | 산업·경쟁 검색어 {extra}" if extra else ""))
+    limit = None if a.full else 15
+
+    def show(title, rows, note):
+        if a.grep:
+            rows = [r for r in rows if _re.search(a.grep, r["title"], _re.I)]
+        print(f"\n[{title}] {len(rows)}건  — {note}")
+        for r in rows[:limit]:
+            print(f"   {r['date']:%Y-%m-%d}  [{r['source'][:14]}] {r['title'][:88]}")
+            print(f"              {r['link']}")
+        if limit and len(rows) > limit:
+            print(f"   … 처음 {limit}건만. 전부 보려면 --full")
+
+    show("(가) 사건", g["사건"], "공시와 연결되는지 events 로 확인")
+    show("(나) 분위기·시황", g["분위기·시황"], "주가·시황 기사")
+    print("   주별 회사 기사 수 (Google / 네이버):  "
+          + "  ".join(f"{w} {gg}/{nn}" for w, gg, nn in news.weekly_counts(g["all_own"])))
+    print("   ※ 기사 수로는 추세를 판단할 수 없음: 네이버는 최대 1,000건(큰 회사는 최근 며칠), Google RSS는 관련도 순 약 100건")
+    tr = news.load_trend(cid) if cid.startswith("KR:") else None
+    if tr and tr.get("week"):
+        wk = tr["week"]
+        avg = sum(v for _, v in wk) / len(wk)
+        last4 = wk[-4:]
+        print(f"   네이버 검색어 트렌드 '{news.query_for(cid)}' (받은 날 {tr['fetched']}, 최근 1년 중 최대 = 100인 상대값)")
+        print(f"     최근 4주: " + "  ".join(f"{p[5:]} {v:.0f}" for p, v in last4)
+              + f"  | 1년 평균 {avg:.0f}, 1년 최대 주 {max(wk, key=lambda x: x[1])[0]}")
+    elif cid.startswith("KR:"):
+        print("   네이버 검색어 트렌드: 받지 않음 (애플리케이션에 '검색어 트렌드' API를 켠 뒤 --fetch)")
+    if extra:
+        show("(다) 산업·경쟁", g["산업·경쟁"], "경쟁사 이름·산업 낱말이 제목에 있는 기사")
+    else:
+        print("\n[(다) 산업·경쟁] 검색어 없음. 경쟁사 이름·산업 낱말을 주면 따로 받음 (승인 후): "
+              "--fetch --terms \"SK하이닉스,HBM,메모리 가격\"")
+    print("\n   ※ 판단은 공시로 한다 (프로필 2번). 뉴스는 시야를 넓히는 데 쓴다")
 
 
 def macro_cmd(a) -> None:
