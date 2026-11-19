@@ -170,6 +170,10 @@ ITEMS: list[Item] = [
          sign="abs",
          note="한국은 손익계산서 본문에 없어 사업보고서 XBRL 주석에서 읽는다 (pipeline/dart_xbrl.py). 회사가 보고한 그대로: "
               "한국(국제회계기준)은 리스부채 이자 포함, 미국은 대부분 미포함 (사용자 결정: 조정하지 않음)."),
+    # ---- 투자기준 6: 수익성과 그 원천 (사용자 결정 2026-11-19) ----
+    Item("interest_bearing_debt", "이자부 부채(차입금·사채·리스)", "stock", BS, (), r"(?!x)x", (),
+         note="스프레드의 이자율 = 이자비용 ÷ 평균 이자부 부채 (사용자 결정). 한국: 재무상태표의 차입금·사채·리스부채 줄 합산. "
+              "미국: 장기 차입금(유동분 포함) + 기업어음·단기차입금 + 금융리스부채. 계산 규칙은 KR_DEBT_RX, US_DEBT."),
     # 미국 주식 수 (한국은 DART '주식의 총수 현황'·'자기주식 취득 및 처분 현황' API 사용: pipeline/dart_shares.py)
     Item("shares_issued", "발행주식 총수(미국)", "shares_stock", BS, (), r"(?!x)x",
          ("us-gaap:CommonStockSharesIssued",), note="자기주식 포함."),
@@ -223,6 +227,27 @@ DERIVATIONS: list[tuple[str, str, str, str]] = [
 FALLBACKS: list[tuple[str, str, str, str]] = [
     ("receivables", "receivables_broad", "scope", "매출채권 줄이 없어 매출채권및기타채권 사용 (기타채권 포함)"),
 ]
+# 이자부 부채 (투자기준 6): 한국은 재무상태표 줄 합산, 미국은 태그 조합 (_us_debt)
+#   (실제 사례: LG화학은 유동·비유동 모두 '차입금', NC '유동성사채및차입금', 삼성전자·현대차 '유동성장기부채'.
+#    셀트리온은 본문에 차입금 줄이 없어 빈칸)
+KR_DEBT_RX = (r"^(단기|장기|유동성장기|유동성|비유동|유동|비유동성)?(차입금|사채|차입부채|리스부채|사채및차입금|차입금및사채|"
+              r"장기부채|전환사채|교환사채|신주인수권부사채|기업어음)$|^유동성장기(차입금|부채)$|^유동성사채및차입금$")
+KR_DEBT_EXCLUDE = r"할인|조정|이자|상환할증|보증|충당"
+KR_FIN_LIAB_RX = r"^(단기|장기|유동|비유동)?(기타)?(유동|비유동)?금융부채$"
+US_DEBT = {
+    # 장기 차입금: 유동분 포함 합계가 있으면 그것, 없으면 비유동 + 유동
+    "long": (("us-gaap:LongTermDebt",), ("us-gaap:LongTermDebtNoncurrent", "us-gaap:LongTermDebtCurrent"),
+             ("us-gaap:LongTermDebtAndCapitalLeaseObligations", "us-gaap:LongTermDebtAndCapitalLeaseObligationsCurrent")),
+    # 단기 차입금 (장기 차입금과 겹치지 않음)
+    "short": ("us-gaap:CommercialPaper", "us-gaap:ShortTermBorrowings"),
+    # 금융리스 부채 (운용리스는 미국 이자비용에 들어가지 않으므로 넣지 않음)
+    "lease": ("us-gaap:FinanceLeaseLiability",),
+    # 국제회계기준(20-F)
+    "ifrs": ("ifrs-full:Borrowings", "ifrs-full:CurrentBorrowings", "ifrs-full:NoncurrentPortionOfNoncurrentBondsIssued",
+             "ifrs-full:CurrentPortionOfNoncurrentBondsIssued", "ifrs-full:LeaseLiabilities"),
+}
+
+
 # 국내: 계정명으로 정의 차이가 드러나는 경우 → 범위 차이 표시 (항목, 계정명 정규식, 설명)
 KR_SCOPE_RULES: list[tuple[str, str, str]] = [
     ("revenue", r"지분법", "매출에 지분법손익이 포함됨 (지주회사, 예: LG '매출 및 지분법 손익')"),
@@ -353,6 +378,34 @@ def _kr(company_id: str) -> pd.DataFrame:
         if ("net_income_parent", r.year) not in have and r.year not in nci_years and pd.notna(r.value):
             extra.append({**r._asdict(), "item": "net_income_parent", "method": "derived", "match": "derived",
                           "match_note": "비지배지분이 없어 손익 귀속 구분이 없음 → 연결 순이익 = 지배주주 순이익"})
+    # 이자부 부채: 재무상태표의 차입금·사채·리스부채 줄을 합산 (투자기준 6, 파생)
+    bs = full[(full["sj_div"] == "BS") & full["nm"].str.match(KR_DEBT_RX) & ~full["nm"].str.contains(KR_DEBT_EXCLUDE)
+              & full["thstrm_amount"].notna()]
+    fin_liab = full[(full["sj_div"] == "BS") & full["nm"].str.match(KR_FIN_LIAB_RX)]
+    # 차입금·리스 줄이 하나도 없고 금융부채 줄만 있는 해도 같은 규칙 (실제 사례: 셀트리온)
+    years = sorted(set(bs["bsns_year"]) | set(fin_liab["bsns_year"]))
+    for y in years:
+        g = bs[bs["bsns_year"] == y].drop_duplicates(["nm", "code", "thstrm_amount"])
+        if g.empty and not (fin_liab["bsns_year"] == y).any():
+            continue
+        if g.empty:
+            g = fin_liab[fin_liab["bsns_year"] == y].head(1)   # 빈칸 행의 공시번호용
+        # 차입금·사채 줄 없이 리스부채만 있고 '금융부채' 줄이 있으면, 차입금이 금융부채에 묶인 것 → 빈칸 (사용자 결정)
+        #   (실제 사례: HD현대중공업은 리스부채만 잡혀 이자율 449%로 나왔다)
+        if not g["nm"].str.contains(r"차입|사채|장기부채|기업어음").any() \
+                and (fin_liab["bsns_year"] == y).any():
+            extra.append({"item": "interest_bearing_debt", "year": int(y), "period_end": pend(pd.Series([y])).iat[0],
+                          "value": float("nan"), "currency": "KRW",
+                          "source": "차입금 줄 없음 (" + ", ".join(fin_liab.loc[fin_liab["bsns_year"] == y, "account_nm"]
+                                                          .str.replace(" ", "").unique()) + ")",
+                          "filing": g["rcept_no"].iat[0], "method": "derived", "match": "derived",
+                          "match_note": "재무상태표에 차입금·사채 줄이 없음 (금융부채에 포함됐을 수 있음) → 빈칸"})
+            continue
+        extra.append({"item": "interest_bearing_debt", "year": int(y), "period_end": pend(pd.Series([y])).iat[0],
+                      "value": g["thstrm_amount"].sum(), "currency": g["currency"].fillna("KRW").iat[0],
+                      "source": " + ".join(g["account_nm"].str.replace(" ", "")), "filing": g["rcept_no"].iat[0],
+                      "method": "derived", "match": "derived",
+                      "match_note": "재무상태표 본문의 차입금·사채·리스부채 줄 합산 (본문에 없는 차입금은 빠짐)"})
     # 이자비용: 손익계산서 본문에 없어 사업보고서 XBRL 주석에서 (투자기준 5)
     from . import dart_xbrl
     extra += dart_xbrl.interest_expense(company_id)
@@ -424,6 +477,29 @@ def _us(company_id: str) -> pd.DataFrame:
             "filing": cands["accn"], "method": "tag",
             "match": cands["match"], "match_note": cands["match_note"],
         }))
+    # 이자부 부채 (투자기준 6): 태그 조합 → 파생. 같은 해 값은 위에서 고른 '최초 연차보고서' 값.
+    v = df[df["unit"] == currency].pivot_table(index="year", columns="full_tag", values="val", aggfunc="first")
+    meta = df.drop_duplicates("year").set_index("year")
+    for y in v.index:
+        g = lambda t: v.at[y, t] if t in v and pd.notna(v.at[y, t]) else None  # noqa: E731
+        parts = []
+        long = next((grp for grp in US_DEBT["long"] if all(g(t) is not None for t in grp[:1])), None)
+        if long:
+            parts += [t for t in long if g(t) is not None]
+        parts += [t for t in US_DEBT["short"] + US_DEBT["lease"] if g(t) is not None]
+        if not long:
+            parts += [t for t in US_DEBT["ifrs"] if g(t) is not None]
+        if not parts:
+            continue
+        ifrs = not long
+        out.append(pd.DataFrame([{
+            "item": "interest_bearing_debt", "year": int(y), "period_end": meta.at[y, "end"] if y in meta.index else None,
+            "value": sum(g(t) for t in parts), "currency": currency.split("/")[0],
+            "source": " + ".join(t.split(":")[1] for t in parts), "filing": anchor.get(y), "method": "derived",
+            "match": "scope" if ifrs else "derived",
+            "match_note": ("국제회계기준 태그 조합 (일부 차입금이 빠졌을 수 있음)" if ifrs else
+                           "장기 차입금(유동분 포함) + 기업어음·단기차입금 + 금융리스부채 합산. 운용리스 부채는 미국 이자비용에 "
+                           "들어가지 않으므로 제외")}]))
     return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
 
 
