@@ -58,8 +58,8 @@ import sys
 import pandas as pd
 
 from pipeline import (capital_allocation, cashflow, dart_officers, dart_shares, dart_xbrl, documents, earnings_quality,
-                      funding, price_level, prices, promises, related_party, returns, safety, service, standard,
-                      us_promises)
+                      events, funding, price_level, prices, promises, qualitative, related_party, returns, safety,
+                      service, standard, us_promises)
 
 sys.stdout.reconfigure(encoding="utf-8")
 pd.set_option("display.width", 250)
@@ -97,7 +97,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("cmd", choices=["search", "get", "fin", "filings", "profile", "std", "doc", "docs", "promises",
                                    "cashflow", "returns", "quality", "safety", "price", "allocation", "related",
-                                   "list"])
+                                   "events", "qual", "list"])
     p.add_argument("query", nargs="?")
     p.add_argument("filter", nargs="?", help="fin: 계정명/태그 일부, filings: 공시명 키워드, doc: 접수번호")
     p.add_argument("--pick", type=int, help="검색 후보 번호")
@@ -110,6 +110,11 @@ def main() -> None:
     p.add_argument("--fetch", action="store_true", help="promises: 아직 받지 않은 공시 본문을 받는다 (사용자 승인 후)")
     p.add_argument("--peers", help="price: 비교할 경쟁사 (쉼표로 구분, 받아 둔 기업 이름)")
     p.add_argument("--owner", help="related: 대주주 쪽으로 판단한 거래 상대 번호 (쉼표로 구분, 사용자 판단을 기록)")
+    p.add_argument("--kinds", help="events: 볼 분류 (쉼표로 구분, 예: 경영진,소송제재사고). 없으면 메뉴와 건수")
+    p.add_argument("--topics", help="qual: 볼 주제 (쉼표로 구분, 예: 해자,수주). 없으면 메뉴")
+    p.add_argument("--since", help="events: 시작일 YYYY-MM-DD (기본: 1년 전)")
+    p.add_argument("--no-sub", action="store_true", help="events: 자회사·종속회사 공시 빼기")
+    p.add_argument("--frequent", action="store_true", help="events: 잦은 지분 변동 공시(최대주주등소유주식변동신고서 등)도 넣기")
     p.add_argument("--attribute", choices=["plan", "result"], default="result",
                    help="promises: 현 대표이사의 기록을 결과 시점(result, 기본·사용자 결정 2026-11-18)/약속 시점(plan) 대표이사로 볼지")
     a = p.parse_args()
@@ -142,6 +147,12 @@ def main() -> None:
         return
     if a.cmd == "related":
         related_cmd(a)
+        return
+    if a.cmd == "events":
+        events_cmd(a)
+        return
+    if a.cmd == "qual":
+        qual_cmd(a)
         return
     if a.cmd == "search":
         results, warnings = service.search(a.query)
@@ -595,6 +606,70 @@ def allocation_cmd(a) -> None:
         for fl in r["flags"]:
             print(f"   · {fl}")
     print("\n   ※ 판정하지 않는다. 주주환원의 의도는 회사마다 논의해서 판단한다 (프로필 4-2).")
+
+
+def events_cmd(a) -> None:
+    """수시공시 이벤트: 그때그때 보고 싶은 분류·검색어만 (외부 요청 없음)."""
+    from datetime import date, timedelta
+    c = resolve_local(a.query, a.pick)
+    cid = c["company_id"]
+    since = a.since or str(date.today() - timedelta(days=365))
+    print(f"\n=== {c['name']} | {cid} | 수시공시 이벤트 ({since} 이후, 받아 둔 공시 목록 기준) ===")
+    kinds = [k.strip() for k in (a.kinds or "").split(",") if k.strip()]
+    if not kinds and not a.grep:
+        print("\n[메뉴] 보고 싶은 분류를 --kinds 로 고르세요 (여러 개는 쉼표). 자유 검색어는 --grep")
+        for k, n in events.menu_counts(cid, since).items():
+            print(f"   {k:<8} {n:>4}건")
+        print("\n   예: uv run data.py events <기업> --kinds 경영진,소송제재사고 --since 2024-01-01")
+        print("   옵션: --no-sub (자회사 공시 빼기), --frequent (잦은 지분 변동 공시 넣기)")
+        return
+    bad = [k for k in kinds if k not in events.MENU]
+    if bad:
+        print(f"메뉴에 없는 분류: {bad}. 메뉴: {', '.join(events.MENU)}")
+    rows = events.find(cid, kinds, since, a.grep, include_subsidiary=not a.no_sub, include_frequent=a.frequent)
+    if not rows:
+        print("해당하는 공시가 없습니다.")
+    for r in rows:
+        sub = " [자회사]" if r["subsidiary"] else ""
+        print(f"   {r['filed']}  {r['kind']:<10} {r['title']}{sub}")
+        print(f"              {r['url']}")
+    print(f"\n   {len(rows)}건. 본문은: uv run data.py doc <기업> <접수번호> (받기 전 승인 필요)")
+    print("   ※ 공시 목록은 기업 데이터를 받을 때 함께 갱신된다 (data.py get, 7일 지나면 다시 받음)")
+
+
+def qual_cmd(a) -> None:
+    """사업보고서(10-K)의 정성 부분: 그때그때 보고 싶은 주제·낱말만, 원문 그대로."""
+    c = resolve_local(a.query, a.pick)
+    cid = c["company_id"]
+    f = qualitative.latest_annual(cid)
+    print(f"\n=== {c['name']} | {cid} | 사업보고서 정성 부분 (원문 발췌, 요약 없음) ===")
+    if not f:
+        print("사업보고서(10-K)를 공시 목록에서 찾지 못했습니다.")
+        return
+    print(f"대상: {f['filed']} {f['title']} (접수번호 {f['rcept_no']})")
+    if not qualitative.have(cid, f["rcept_no"]):
+        if a.fetch:
+            print("본문을 받습니다 (한국 사업보고서는 30초~2분)...")
+            documents.fetch(cid, f["rcept_no"])
+        else:
+            print("본문을 아직 받지 않았습니다. 받으려면 승인 후: uv run data.py qual <기업> --fetch")
+            return
+    topics = [t.strip() for t in (a.topics or "").split(",") if t.strip()]
+    if not topics and not a.grep:
+        print("\n[메뉴] 보고 싶은 주제를 --topics 로 고르세요 (여러 개는 쉼표). 자유 검색어는 --grep")
+        for t, (kr_rx, us_rx) in qualitative.TOPICS.items():
+            print(f"   {t:<6} 찾는 말: {kr_rx if cid.startswith('KR:') else us_rx}")
+        return
+    hits = qualitative.search(cid, f["rcept_no"], topics, a.grep, limit=0 if a.full else 30)
+    if not hits:
+        print("해당하는 부분이 없습니다.")
+    for h in hits:
+        print(f"\n[{h['topic']}] {h['section']}  (문서 {h['part']} {h['part_title'] or ''}, {h['line']}번째 줄)")
+        for ln in h["text"].split("\n"):
+            print(f"   {ln[:300]}")
+    more = "" if a.full else " (최대 30곳. 전부 보려면 --full)"
+    print(f"\n   {len(hits)}곳{more}. 출처: {f['title']}, 접수번호 {f['rcept_no']}")
+    print("   절 전체를 보려면: uv run data.py doc <기업> <접수번호> --section <제목 일부>")
 
 
 def related_cmd(a) -> None:

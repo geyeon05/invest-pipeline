@@ -3,3 +3,9 @@
 __pycache__/
 # 수집 데이터는 캐시: 언제든 원천(DART/SEC)에서 다시 받을 수 있으므로 올리지 않는다
 data/
+
+# 직접 넣는 자료: 저작권 있는 PDF·이미지는 올리지 않음 (사용자 결정 2026-11-19)
+inputs/reports/*.pdf
+inputs/esg/*.pdf
+inputs/esg/*.png
+inputs/esg/*.jpg
