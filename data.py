@@ -727,12 +727,19 @@ def news_cmd(a) -> None:
     print("   ※ 기사 수로는 추세를 판단할 수 없음: 네이버는 최대 1,000건(큰 회사는 최근 며칠), Google RSS는 관련도 순 약 100건")
     tr = news.load_trend(cid) if cid.startswith("KR:") else None
     if tr and tr.get("week"):
+        from datetime import date as _date, timedelta as _td
         wk = tr["week"]
-        avg = sum(v for _, v in wk) / len(wk)
-        last4 = wk[-4:]
+        fetched = _date(int(tr["fetched"][:4]), int(tr["fetched"][4:6]), int(tr["fetched"][6:8]))
+        # 받은 날 기준으로 아직 끝나지 않은 주는 값이 낮게 나오므로 평균·최대에서 빼고 '진행 중'으로 표시
+        full = [(p, v) for p, v in wk if _date.fromisoformat(p) + _td(days=7) <= fetched]
+        partial = [(p, v) for p, v in wk if (p, v) not in full]
+        avg = sum(v for _, v in full) / len(full) if full else 0
         print(f"   네이버 검색어 트렌드 '{news.query_for(cid)}' (받은 날 {tr['fetched']}, 최근 1년 중 최대 = 100인 상대값)")
-        print(f"     최근 4주: " + "  ".join(f"{p[5:]} {v:.0f}" for p, v in last4)
-              + f"  | 1년 평균 {avg:.0f}, 1년 최대 주 {max(wk, key=lambda x: x[1])[0]}")
+        print("     최근 4주: " + "  ".join(f"{p[5:]} {v:.0f}" for p, v in full[-4:])
+              + "".join(f"  ({p[5:]} 주는 진행 중 {v:.0f})" for p, v in partial)
+              + f"  | 1년 평균 {avg:.0f}, 1년 최대 주 {max(full, key=lambda x: x[1])[0] if full else '-'}")
+        if tr.get("date"):
+            print("     최근 7일 (일 단위, 30일 중 최대 = 100): " + "  ".join(f"{p[5:]} {v:.0f}" for p, v in tr["date"][-7:]))
     elif cid.startswith("KR:"):
         print("   네이버 검색어 트렌드: 받지 않음 (애플리케이션에 '검색어 트렌드' API를 켠 뒤 --fetch)")
     if extra:
