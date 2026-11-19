@@ -65,7 +65,7 @@ import pandas as pd
 
 from pipeline import (capital_allocation, cashflow, dart_officers, dart_shares, dart_xbrl, documents, earnings_quality,
                       events, funding, macro, news, price_level, prices, promises, qualitative, related_party,
-                      returns, safety, service, standard, us_promises)
+                      returns, runway, safety, service, standard, us_promises)
 
 sys.stdout.reconfigure(encoding="utf-8")
 pd.set_option("display.width", 250)
@@ -103,7 +103,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("cmd", choices=["search", "get", "fin", "filings", "profile", "std", "doc", "docs", "promises",
                                    "cashflow", "returns", "quality", "safety", "price", "allocation", "related",
-                                   "events", "qual", "news", "macro", "list"])
+                                   "events", "qual", "news", "macro", "runway", "list"])
     p.add_argument("query", nargs="?")
     p.add_argument("filter", nargs="?", help="fin: 계정명/태그 일부, filings: 공시명 키워드, doc: 접수번호")
     p.add_argument("--pick", type=int, help="검색 후보 번호")
@@ -151,6 +151,9 @@ def main() -> None:
         return
     if a.cmd == "price":
         price_cmd(a)
+        return
+    if a.cmd == "runway":
+        runway_cmd(a)
         return
     if a.cmd == "allocation":
         allocation_cmd(a)
@@ -808,6 +811,71 @@ def related_cmd(a) -> None:
     else:
         print("\n대주주 쪽 상대를 고르면 비율이 계산됩니다: uv run data.py related <기업> --owner 1,3,5")
     print("\n   ※ 주의 기준(%)은 분석할 때 판단한다 (숫자 기준 3). '기타'로 묶인 상대는 구성을 알 수 없다.")
+
+
+def runway_cmd(a) -> None:
+    """버티는 힘: 연구개발비(비용 처리분), 현금 + 단기 금융자산, 1년에 빠져나가는 현금, 몇 년 버티나 (판정 없음)."""
+    c = resolve_local(a.query, a.pick)
+    peers = [resolve_local(p.strip(), None) for p in (a.peers or "").split(",") if p.strip()]
+    for t in [c] + peers:
+        cid = t["company_id"]
+        r = runway.table(cid)
+        cur = r["currency"]
+        unit, div = ("억원", 1e8) if cur == "KRW" else (f"백만 {cur}", 1e6)
+
+        def f(v):
+            return "-" if v is None or v != v else f"{v / div:,.0f}"
+
+        start = runway.START_YEAR.get(cid)
+        print(f"\n=== {t['name']} | {cid} | 버티는 힘 (단위: {unit}, 연결)"
+              + (f" — {start}년부터 (사용자 결정)" if start else "") + " ===")
+        print(f"   {'연도':<6}{'연구개발비':>10}{'현금':>10}{'단기금융':>10}{'합계':>10}{'(기타금융)':>11}"
+              f"{'영업CF':>10}{'설비투자':>10}{'빠져나감':>10}{'버티는 해':>9}")
+        for x in r["rows"]:
+            rw = "해당 없음" if x["burn"] is None and x["ocf"] is not None else (
+                "-" if x["runway"] is None else f"{x['runway']:.1f}년")
+            print(f"   {x['year']:<6}{f(x['rnd']):>10}{f(x['cash']):>10}{f(x['short']):>10}{f(x['total']):>10}"
+                  f"{'(' + f(x['other']) + ')':>11}{f(x['ocf']):>10}{f(x['capex']):>10}{f(x['burn']):>10}{rw:>9}")
+        blanks = [f"{x['year']}: {x['rnd_reason'][:60]}" for x in r["rows"] if x["rnd"] is None and x["rnd_reason"]]
+        last = r["rows"][-1] if r["rows"] else {}
+        print(f"   현금에 넣은 줄 ({last.get('year', '')}): {', '.join(last.get('lines', [])) or '-'}")
+        print("   연구개발비 출처: " + ("SEC 10-K ResearchAndDevelopmentExpense" if cid.startswith("US:")
+                                    else "inputs/case3/rnd_expensed.json (연결 주석에서 옮겨 적음, 접수번호 포함)"))
+        for b in blanks[:1]:
+            print(f"   연구개발비 빈칸 — {b}…")
+        if any(x["finance_arm"] for x in r["rows"]):
+            print("   ※ 연결에 금융 자회사(금융업채권)가 있음: 현금·영업CF에 금융업이 섞여 있어 자동차 사업만의 숫자가 아님")
+
+        # 빌릴 능력 (A 이미 빌린 정도, B 이자 감당) · 주식 조달 (E) — 버티는 해 계산에는 넣지 않음
+        ys = [x["year"] for x in r["rows"]]
+        b = runway.borrowing(cid, ys)
+
+        def g(v, p=2):
+            return "-" if v is None or v != v else f"{v:.{p}f}"
+        print(f"\n   [빌릴 능력·주식 조달] (단위: {unit})")
+        print(f"   {'연도':<6}{'부채비율':>9}{'이자보상':>9}{'이자부부채':>11}{'순차입금':>11}{'재무활동CF':>11}{'주식발행':>10}"
+              + ("" if cid.startswith("US:") else f"{'신종자본증권':>11}"))
+        for x in b:
+            print(f"   {x['year']:<6}{g(x['debt_ratio']):>9}{g(x['icr'], 1):>9}{f(x['debt']):>11}{f(x['net_debt']):>11}"
+                  f"{f(x['fin_net']):>11}{f(x['equity']):>10}" + ("" if cid.startswith("US:") else f"{f(x['hybrid']):>11}"))
+        cap = runway.capacity_facts(cid)
+        cl = cap.get("credit_lines")
+        if cl:
+            print(f"   차입 약정 (총 한도, {cl['as_of']}): {cl['summary']}")
+            print(f"     [출처: {cl['rcept_no']}, {cl['note']}]")
+        if cap.get("caution"):
+            print(f"   ※ {cap['caution']}")
+        for e in cap.get("equity_events", []):
+            amt = "-" if e.get("usd_m") is None else f"${e['usd_m']:,.1f}M"
+            print(f"   · {e['when']:<16} {e['what']}  {amt}")
+        if cap.get("equity_events"):
+            print(f"     [출처: SEC 10-K FY2025, accn {cl['rcept_no'] if cl else ''}, Liquidity and Capital Resources]")
+            print("   ※ 주식발행 열은 표준 태그로 잡히는 것만 (공모 증자·ATM은 회사 고유 태그라 빠짐 → 위 목록)")
+    print("\n   ※ 빠져나감 = 영업CF − 설비투자가 마이너스일 때 그 크기. 플러스면 '해당 없음'. 버티는 해 = 합계 ÷ 빠져나감")
+    print("   ※ (기타금융)은 기타금융자산·기타투자자산(유동). 합계에 넣지 않음 (사용자 결정)")
+    print("   ※ 버티는 해에는 차입 여력·증자·정부 지원을 넣지 않음. 빌릴 능력은 아래 표로 따로 봄")
+    print("   ※ 부채비율·이자보상비율은 safety 도구 값 그대로. 순차입금 = 이자부 부채 − (현금 + 단기 금융자산)")
+    print("   ※ 차입 약정은 총 한도만 (이미 빌린 금액이 섞여 있고, 사용 금액이 공시되지 않아 안 쓴 한도는 알 수 없음)")
 
 
 def price_cmd(a) -> None:

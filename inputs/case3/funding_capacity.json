@@ -1,0 +1,34 @@
+{
+  "_설명": "사례 3 (UAM) 버티는 힘 - 빌릴 능력·주식 조달 (사용자 결정 2026-11-19). C: 차입 약정은 '총 한도'만 사실로 표시 (사용 금액이 공시되지 않아 안 쓴 한도를 계산할 수 없음, 사용자 결정 a). E(Joby): 표준 태그로 잡히지 않는 주식 조달을 10-K 본문에서 옮겨 적음. 금액 단위는 각 항목에 표시.",
+  "KR:00164742": {
+    "credit_lines": {"as_of": "2025-12-31", "rcept_no": "20260318001394", "note": "연결 주석 36. 우발부채 및 약정사항 - 약정에 대한 공시 (여신약정)",
+      "summary": "당좌대출·일반대출·무역금융 등 여신약정 한도: 원화 6조 7,643억원 + USD 410억달러 상당액 (국민은행 등 다수의 금융기관). 사용 금액은 공시되지 않음",
+      "quote": "연결실체는 당좌대출, 일반대출 및 무역금융 등의 여신 약정을 체결하고 있습니다. 약정한도(USD)는 410억달러 상당액입니다. / 약정한도 | 6,764,300"},
+    "caution": "위험관리 주석의 '한도대출약정 미사용한도'(현대캐피탈 9,854억, 현대카드 81.5조)는 금융 자회사가 고객에게 준 한도라 회사의 차입 여력이 아님"
+  },
+  "KR:00162461": {
+    "credit_lines": {"as_of": "2025-12-31", "rcept_no": "20261112000461", "note": "연결 주석 34. 우발부채, 우발자산 및 약정사항 - 약정에 대한 공시",
+      "summary": "당좌차월·수입 Usance·수출 D/A 등·기타 약정 한도: 원화 4조 8,746억원 + USD 54.9억 + EUR 9.9억 + CNY 8.0억 + MYR 7.1억 + CHF 2.0억 + THB 1.4억 + CZK 1.2억 + MXN 0.9억. 사용 금액은 공시되지 않음",
+      "quote": "약정의 유형 합계 | 4,874,585 | 5,488,676,449 | 991,466,400 | 800,000,000 | 706,996,077 | 200,000,000 | 140,000,000 | 121,205,062 | 89,939,827 / 한도가 설정되지 않은 사채, 비소구조건 팩토링 약정, 계약이행보증 성격 등의 금액은 제외하였습니다."}
+  },
+  "KR:00126362": {
+    "credit_lines": {"as_of": "2025-12-31", "rcept_no": "20260310002954", "note": "연결 주석 20. 우발부채와 약정사항 - 차입관련 약정사항",
+      "summary": "당좌차월·일반자금대출·수입L/C·외화지급보증·D/A 등 대출약정: 원화 1조 555억원 + USD 55.2억 + CNY 21.3억 + EUR 8.3억 (외화지급보증·수입L/C 한도 포함). 사용 금액은 공시되지 않음",
+      "quote": "총 대출약정금액 | 5,500 | 1,050,000 | ... | 1,055,500 / 총 대출약정금액,(USD) [USD, 천] | ... | 5,518,280 / 총 대출약정금액(CNY) [CNY, 천] | ... | 2,130,000"}
+  },
+  "US:0001819848": {
+    "credit_lines": {"as_of": "2025-12-31", "rcept_no": "0001819848-26-000160", "note": "10-K FY2025 본문 검색 (credit facility, line of credit, revolving)",
+      "summary": "은행 차입 한도(신용 한도·리볼빙) 기재 없음. 자금은 주식 발행·전환사채로 조달",
+      "quote": "본문에 'credit facility', 'line of credit', 'revolving' 단어가 나오지 않음"},
+    "equity_events": [
+      {"when": "2025-05", "what": "Toyota 1차 투자 (주식 49,701,790주, 주당 $5.03)", "usd_m": 249.9, "quote": "In May 2025, we issued 49,701,790 shares at a price per share of $5.03 for net proceeds of $249.9 million pursuant to a stock purchase agreement with Toyota"},
+      {"when": "2025-10", "what": "공모 증자 (35,075,000주)", "usd_m": 575.9, "quote": "In October 2025, we raised $575.9 million in net proceeds from an underwritten public offering of 35,075,000 shares of our common stock."},
+      {"when": "~2025-12", "what": "ATM(시장가 수시 발행) 누적 — 한도 $300.0M 중 남은 $8.1M", "usd_m": 282.4, "quote": "As of December 31, 2025, 29,950,799 shares of our common stock have been sold pursuant to the Equity Distribution Agreement for net proceeds of $282.4 million. As of December 31, 2025, $8.1 million remains available for sale"},
+      {"when": "~2025-12", "what": "공개 워런트 행사 누적", "usd_m": 34.6, "quote": "As of December 31, 2025, we have received $34.6 million from the exercise of our Public Warrants."},
+      {"when": "2026-01 (결산 후)", "what": "Delta 워런트 1차 행사", "usd_m": 70.0, "quote": "In January 2026, we have received $70.0 million from the exercise of the first tranche of Delta Warrant"},
+      {"when": "2026-02 (결산 후)", "what": "공모 증자 (52,863,437주)", "usd_m": 576.0, "quote": "In February 2026, we raised net proceeds of approximately $576.0 million from an underwritten public offering of 52,863,437 shares of our common stock"},
+      {"when": "2026-02 (결산 후)", "what": "전환사채 $690.0M, 연 0.75%, 2032년 만기 (빌린 돈)", "usd_m": 670.4, "quote": "net proceeds of approximately $670.4 million from an underwritten public offering of $690.0 million principal amount of 0.75% Convertible Senior Notes due 2032"},
+      {"when": "미정", "what": "Toyota 2차 투자 $250.0M — 전략적 제휴 체결 등 조건이 있어 성사 보장 없음", "usd_m": null, "quote": "The second tranche is subject to conditions including, but not limited to the execution of a strategic alliance ... no assurance can be given that the second tranche closing will take place on the timeline currently anticipated or at all."}
+    ]
+  }
+}
