@@ -62,7 +62,7 @@ def _us_values(company_id: str, tags: tuple, flow: bool) -> dict:
     df = df[df["form"].isin(["10-K", "10-K/A", "20-F", "20-F/A"]) & df["tag"].isin(tags)]
     out = {}
     for r in df.sort_values("filed").itertuples():
-        if flow and (not r.start or (int(r.end[:4]) - int(r.start[:4])) * 12 + int(r.end[5:7]) - int(r.start[5:7]) < 11):
+        if flow and (not isinstance(r.start, str) or (int(r.end[:4]) - int(r.start[:4])) * 12 + int(r.end[5:7]) - int(r.start[5:7]) < 11):
             continue
         y = int(r.end[:4])
         if r.end[5:] != "12-31":
