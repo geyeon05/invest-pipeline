@@ -45,7 +45,6 @@ uv run data.py doc 삼성전자 20260310002820 --grep 자기주식         # 키
 ## 구조
 
 ```
-dashboard.py          웹 화면 (사람용)
 data.py               명령어 도구 (AI·사람 공용)
 pipeline/
   registry.py         기업명 → 고유번호 검색 (DART 상장사 목록, SEC 티커 목록)
@@ -62,16 +61,9 @@ data/                 수집 캐시 (git 제외, 언제든 원천에서 다시 �
 ```bash
 cp .env.example .env      # DART_API_KEY 입력
 uv sync
-uv run streamlit run dashboard.py
 uv run data.py fin 삼성전자 매출액
 ```
 
-## 배포 (Streamlit Cloud)
+## 분석 진행 화면 (준비 중)
 
-앱 설정 → **Secrets** 에 다음을 넣는다:
-
-```toml
-DART_API_KEY = "발급받은 키"
-```
-
-배포 환경의 `data/` 는 앱이 재시작되면 비워지지만, 기업을 다시 검색하면 원천에서 자동으로 다시 수집된다.
+분석 단계를 정해진 순서로 돌리는 엔진을 먼저 만들고(터미널), 그 위에 내 컴퓨터에서만 여는 Streamlit 화면을 얹는다. 인터넷 공개 배포는 하지 않는다 (2026-11-20 결정, 기존 원본 탐색 화면 `dashboard.py`는 삭제).
