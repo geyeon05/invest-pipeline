@@ -9,3 +9,7 @@ inputs/reports/*.pdf
 inputs/esg/*.pdf
 inputs/esg/*.png
 inputs/esg/*.jpg
+
+# 실제 투자 기록: 개인 투자 정보라 올리지 않음 (사용자 결정 2026-11-20). 설명서만 올린다
+analyses/*
+!analyses/_투자_분석_단계.md

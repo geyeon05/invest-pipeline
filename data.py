@@ -27,6 +27,15 @@
   분석 도구: 현금 창출 (결과만 보여줌 + 내 기준 '영업CF가 꾸준히 늘었나', 외부 요청 없음)
   uv run data.py cashflow 삼성전자 [--source]      # 최근 5년 영업CF·FCF·현금 전환율 + 표시
 
+  공책 (회사마다 한 권, analyses/_투자_분석_단계.md · 외부 요청 없음)
+  uv run data.py run 삼성전자                       # 엔진이 단계를 계산해 공책에 적음 (붙인 단계만, 켜진 신호마다 논의 항목)
+  uv run data.py run 삼성전자 --new-round --mode 바뀐 부분만   # 다시 분석: 새 회차
+  uv run data.py note 삼성전자                      # 공책 보기
+  uv run data.py note 삼성전자 --step 5 --item 1 --draft "…"   # 논의 항목 1의 초안 / --feedback / --revise / --confirm / --reopen
+  uv run data.py note 삼성전자 --step 2 --checked       # 단순 정보 확인함
+  uv run data.py note 삼성전자 --step 5 --item 1 --add-check "…" --method 기존 부품   # --item 없으면 단계 전체
+  uv run data.py note 삼성전자 --step 5 --item 1 --done-check 1 --result "…" --check-source "…"
+
   분석 도구: 자본 배분 (번 돈을 어디에 썼고 결과가 어땠나, 판정 없음, 외부 요청 없음)
   uv run data.py allocation 삼성전자               # 영업CF·설비 재투자·FCF·주주환원·부채 증감·ROE·스프레드 + 의도를 논의할 사실 5가지
 
@@ -58,16 +67,18 @@
   uv run data.py price 삼성전자 --fetch            # 주가(Yahoo Finance)·한국 주식 수(DART)를 받은 뒤 표시 (승인 후)
 """
 import argparse
+from pathlib import Path
 import json
 import sys
 
 import pandas as pd
 
-from pipeline import (capital_allocation, cashflow, dart_officers, dart_shares, dart_xbrl, documents, earnings_quality,
+from pipeline import (capital_allocation, case, cashflow, flow, holdings, notebook, report, dart_officers, dart_shares, dart_xbrl, documents, earnings_quality,
                       events, funding, macro, news, price_level, prices, promises, qualitative, related_party,
                       returns, runway, safety, service, standard, us_promises)
 
 sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")   # 오류 메시지(sys.exit)도 한글이 깨지지 않게
 pd.set_option("display.width", 250)
 pd.set_option("display.max_columns", 30)
 pd.set_option("display.max_rows", 500)
@@ -103,7 +114,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("cmd", choices=["search", "get", "fin", "filings", "profile", "std", "doc", "docs", "promises",
                                    "cashflow", "returns", "quality", "safety", "price", "allocation", "related",
-                                   "events", "qual", "news", "macro", "runway", "list"])
+                                   "events", "qual", "news", "macro", "runway", "run", "note", "case", "hold", "list"])
     p.add_argument("query", nargs="?")
     p.add_argument("filter", nargs="?", help="fin: 계정명/태그 일부, filings: 공시명 키워드, doc: 접수번호")
     p.add_argument("--pick", type=int, help="검색 후보 번호")
@@ -124,6 +135,42 @@ def main() -> None:
     p.add_argument("--frequent", action="store_true", help="events: 잦은 지분 변동 공시(최대주주등소유주식변동신고서 등)도 넣기")
     p.add_argument("--attribute", choices=["plan", "result"], default="result",
                    help="promises: 현 대표이사의 기록을 결과 시점(result, 기본·사용자 결정 2026-11-18)/약속 시점(plan) 대표이사로 볼지")
+    # ---- 공책 (analyses/_투자_분석_단계.md, pipeline/notebook.py) ----
+    p.add_argument("--new-round", action="store_true", help="run: 새 회차를 연다 (다시 분석할 때)")
+    p.add_argument("--mode", choices=["처음부터", "바뀐 부분만"], help="run --new-round: 사용자가 고른 방식")
+    p.add_argument("--step", help="note: 단계 번호 (1~9). 과제 공책은 q1, q2 … / claim")
+    p.add_argument("--item", type=int, help="note: 논의 항목 번호 (단계 안에서 1부터, 켜진 신호 하나하나). 없으면 단계 전체")
+    p.add_argument("--draft", help="note: 초안 (사용자)")
+    p.add_argument("--feedback", help="note: 피드백 (Claude)")
+    p.add_argument("--revise", help="note: 고친 판단으로 한 번 더 피드백 받기 (사용자)")
+    p.add_argument("--confirm", help="note: 확정한 판단 (사용자). 확인할 것이 남으면 거절됨")
+    p.add_argument("--checked", action="store_true", help="note: 단순 정보 '확인함' (사용자)")
+    p.add_argument("--reopen", action="store_true", help="note: 확정한 판단 다시 열기 (사용자)")
+    p.add_argument("--add-check", help="note: 확인할 것 추가 (Claude)")
+    p.add_argument("--method", choices=["기존 부품", "자료 받기", "새 도구"], help="note --add-check: 처리 방법")
+    p.add_argument("--done-check", type=int, help="note: 확인을 끝낸 '확인할 것' 번호")
+    p.add_argument("--result", help="note --done-check: 확인한 결과")
+    p.add_argument("--check-source", help="note --done-check: 결과의 출처")
+    p.add_argument("--text-file", help="note: 판단·피드백 내용을 파일에서 읽기 (UTF-8, 긴 글)")
+    p.add_argument("--case", help="note: 과제ID (과제용 회사 공책에 적기)")
+    p.add_argument("--case-book", action="store_true", help="note: 과제 공책(질문·주장)에 적기. 회사 이름 자리에 과제ID")
+    p.add_argument("--new", action="store_true", help="case: 새 과제 만들기")
+    p.add_argument("--title", help="case --new: 과제 제목")
+    p.add_argument("--week", type=int, help="case --new: 주차")
+    p.add_argument("--in-file", help="case --new: IN 자료 파일 이름")
+    p.add_argument("--pre-file", help="case --new: PRE 자료 파일 이름")
+    p.add_argument("--table-file", help="case: 대응표 JSON (summary, alternatives, deliver, pre_concepts, questions)")
+    p.add_argument("--approve", action="store_true", help="case: 대응표 승인 기록 (사용자가 승인했을 때만)")
+    p.add_argument("--stage", type=int, help="case: 지금 단계 (1~7)")
+    p.add_argument("--companies", help="case: 분석할 회사 (쉼표, 받아 둔 회사)")
+    p.add_argument("--run", action="store_true", help="case: 분석할 회사를 내 9단계로 계산 (외부 요청 없음)")
+    p.add_argument("--note", help="hold --bought: 메모")
+    p.add_argument("--bought", help="hold: 산 날짜 YYYY-MM-DD (사용자가 샀다고 할 때만)")
+    p.add_argument("--check", choices=["정기", "바로"], help="hold: 보유 점검 시작 (정기 = 새 사업보고서, 바로 = 바로 확인할 일)")
+    p.add_argument("--report-file", help="case: 6단계 보고서 md (Claude가 사용자의 뼈대대로 쓴 것) 등록")
+    p.add_argument("--outputs", action="store_true", help="case: 6단계 결과물 만들기 (검증표·역할구분 md+PDF, 보고서 PDF)")
+    p.add_argument("--conclusion", choices=["산다", "기다린다", "사지 않는다", "계속 보유", "일부 판다", "판다"], help="note --confirm: 최종 판단(9) 또는 보유 점검(h1…) 결론")
+    p.add_argument("--recheck", help="note --step 9 --confirm: 다시 볼 조건 ('기다린다'면 필수, 여러 개는 ; 로 구분)")
     a = p.parse_args()
 
     if a.cmd == "list":
@@ -136,6 +183,18 @@ def main() -> None:
         p.error("기업명 또는 티커를 입력하세요.")
     if a.cmd == "promises":
         promises_cmd(a)
+        return
+    if a.cmd == "run":
+        run_cmd(a)
+        return
+    if a.cmd == "note":
+        note_cmd(a)
+        return
+    if a.cmd == "case":
+        case_cmd(a)
+        return
+    if a.cmd == "hold":
+        hold_cmd(a)
         return
     if a.cmd == "cashflow":
         cashflow_cmd(a)
@@ -374,6 +433,202 @@ def promises_cmd(a) -> None:
     print(f"   {v['verdict']}  ({v['why']})  [{label}]  | 진행 중 {v['pending']}건, 확인·판단 필요 {v['unresolved']}건")
 
 
+LANE = {"info": "단순 정보", "discuss": "논의할 부분"}
+
+
+def show_page(p: dict) -> None:
+    print(f"\n[{p['no']} {p['name']}] {LANE[p['lane']]} · 지금 상태: {notebook.status(p)}")
+    for line in p["summary"]:
+        print(f"   {line}")
+    if p.get("sources"):
+        fil = sorted({(s["year"], s["filing"]) for s in p["sources"]})
+        print("   출처: " + ", ".join(f"{y} {f}" for y, f in fil))
+
+    def checks(cs, indent):
+        for c in cs:
+            mark = "✓" if c["status"] == "done" else "☐"
+            tail = (f" → {c['result']}" + (f" [{c['source']}]" if c["source"] else "")) if c["status"] == "done" else ""
+            print(f"{indent}{mark} 확인할 것 #{c['id']} ({c['method']}) {c['text']}{tail}")
+
+    def logs(es, indent):
+        for e in es:
+            who = {"user": "나", "ai": "Claude"}[e["by"]]
+            print(f"{indent}- {e['at'][:16]} {notebook.KINDS[e['kind']][1]} ({who})" + (f": {e['text']}" if e["text"] else ""))
+
+    if p["checks"]:
+        print("   [단계 전체]")
+        checks(p["checks"], "   ")
+    logs(p["log"], "   ")
+    for n, it in enumerate(notebook.live_items(p), 1):
+        print(f"   ({n}) {it['title']} · {notebook.item_status(it)}" + (f" — {it['detail']}" if it["detail"] else ""))
+        logs(it["log"], "       ")
+        checks(it["checks"], "       ")
+    gone = [it for it in p["items"] if it.get("gone")]
+    if gone:
+        print("   다시 계산하니 사라진 신호: " + ", ".join(it["title"] for it in gone))
+
+
+def run_cmd(a) -> None:
+    """엔진: 단계를 계산해 공책에 적는다 (외부 요청 없음, 받아 둔 자료만)."""
+    c = resolve_local(a.query, a.pick)
+    book = notebook.load(c) or notebook.new_book(c)
+    if not book["rounds"]:
+        notebook.new_round(book, "처음부터")
+    elif a.new_round:
+        if not a.mode:
+            sys.exit("새 회차는 --mode 처음부터 / 바뀐 부분만 을 정해야 합니다 (사용자가 고름).")
+        notebook.new_round(book, a.mode)
+    results = flow.run(c["company_id"])
+    for no, res in results.items():
+        prev = notebook.current_round(book)["steps"].get(str(no), {})
+        had = bool(prev.get("log")) or any(it["log"] for it in prev.get("items", []))
+        notebook.put_result(book, no, res)
+        if had:
+            print(f"※ {no}단계에 이미 판단 기록이 있어 기록은 그대로 두고 계산 결과만 새로 적었습니다.")
+    path = notebook.save(c, book)
+    r = notebook.current_round(book)
+    print(f"\n=== {c['name']} | {c['company_id']} | 공책 {r['no']}회차 ({r['mode']}) ===")
+    print(f"공책: {path}")
+    todo = [no for no in range(1, 9) if no not in flow.IMPLEMENTED]
+    print(f"계산한 단계: {', '.join(f'{n} {notebook.STEPS[n]}' for n in results)}  |  아직 엔진에 없는 단계: {todo}")
+    for no in results:
+        show_page(r["steps"][str(no)])
+
+
+def _step_key(k: str):
+    return (0, int(k)) if str(k).isdigit() else (1, str(k))
+
+
+def note_cmd(a) -> None:
+    """공책에 판단을 적는다. 화면과 Claude Code가 모두 이 명령(=notebook 함수)으로만 쓴다.
+    --case 과제ID: 과제용 회사 공책 (cases/<과제>/companies/). --case-book: 과제 공책(질문 q1… · 주장 claim, 회사 이름 자리에 과제ID)."""
+    if a.case_book:
+        cs = case.load(a.query)
+        book, c, base = case.load_book(cs), None, None
+        save = lambda b: case.save_book(cs, b)  # noqa: E731
+        title = f"과제 {cs['id']} 공책"
+    else:
+        c = resolve_local(a.query, a.pick)
+        base = case.companies_base(a.case) if a.case else None
+        book = notebook.load(c, base)
+        if book is None:
+            sys.exit("공책이 아직 없습니다. 먼저 run (과제면 case --run) 으로 계산하세요.")
+        save = lambda b: (notebook.save(c, b, base), None if base else holdings.write())  # noqa: E731
+        title = f"{c['name']}" + (f" (과제 {a.case})" if a.case else "")
+    step = None if a.step is None else (int(a.step) if str(a.step).isdigit() else a.step)
+    text = open(a.text_file, encoding="utf-8").read().strip() if a.text_file else None
+    acts = [k for k in ("draft", "feedback", "revise", "confirm") if getattr(a, k)]
+    try:
+        if step is None:
+            r = notebook.current_round(book)
+            print(f"\n=== {title} | 공책 {r['no']}회차 ({r['mode']}) | 지금: {book['current']['stage']} ===")
+            for no in sorted(r["steps"], key=_step_key):
+                show_page(r["steps"][no])
+            return
+        if step == 9 and not a.case_book and "9" not in notebook.current_round(book)["steps"]:
+            notebook.open_final(book, flow.final_summary(book))     # 잠금이 풀렸을 때만 열린다
+        if len(acts) + a.checked + a.reopen + bool(a.add_check) + bool(a.done_check) > 1:
+            sys.exit("한 번에 하나만 적습니다.")
+        if acts:
+            notebook.add_log(book, step, acts[0], text or getattr(a, acts[0]), a.item, a.conclusion,
+                             [x for x in (a.recheck or "").split(";") if x.strip()])
+        elif a.checked:
+            notebook.add_log(book, step, "checked")
+        elif a.reopen:
+            notebook.add_log(book, step, "reopen", "", a.item)
+        elif a.add_check:
+            if not a.method:
+                sys.exit("--method 기존 부품 / 자료 받기 / 새 도구 를 정하세요.")
+            notebook.add_check(book, step, a.add_check, a.method, a.item)
+        elif a.done_check:
+            notebook.done_check(book, step, a.done_check, text or a.result, a.check_source or "", a.item)
+        else:
+            show_page(notebook.page(book, step))
+            return
+    except notebook.NotebookError as e:
+        sys.exit(f"공책에 적지 않았습니다: {e}")
+    save(book)
+    show_page(notebook.page(book, step))
+
+
+def hold_cmd(a) -> None:
+    """보유 중 점검 (analyses/_투자_분석_단계.md 6단계). 외부 요청 없음."""
+    if a.query in (None, "list"):
+        held, trades = holdings.scan()
+        for h in held:
+            print(f"  {h['name']:<20} 산 날짜 {h['since']} · 마지막 점검 {h['last_check']} · 산 이유: {h['reason'][:60]}")
+        print(f"  (보유 {len(held)}곳, 사고판 기록 {len(trades)}건)")
+        return
+    c = resolve_local(a.query, a.pick)
+    book = notebook.load(c)
+    if book is None:
+        sys.exit("공책이 없습니다.")
+    try:
+        if a.bought:
+            notebook.mark_bought(book, a.bought, a.note or "")
+        if a.check:
+            summary, items, checks = flow.holding_check(book, c)
+            p = notebook.start_check(book, a.check, summary, items, checks)
+            notebook.save(c, book)
+            holdings.write()
+            show_page(p)
+            return
+    except notebook.NotebookError as e:
+        sys.exit(f"공책에 적지 않았습니다: {e}")
+    notebook.save(c, book)
+    holdings.write()
+    print(f"{c['name']}: " + (f"보유 중 (산 날짜 {book['holding']['since']})" if book.get("holding") else "보유 안 함"))
+
+
+def case_cmd(a) -> None:
+    """과제 방 (cases/_과제_진행_단계.md). 1~2단계는 대화창에서 사용자와 정한 것을 적는다."""
+    if a.query in (None, "list"):
+        for x in case.list_cases():
+            print(f"  {x['id']:<24} {x['stage']}단계 ({case.STAGES[x['stage']]})  {x['title']}")
+        return
+    try:
+        if a.new:
+            if not a.title:
+                sys.exit("--title 을 정하세요.")
+            cs = case.new(a.query, a.title, a.week, a.in_file or "", a.pre_file or "")
+        else:
+            cs = case.load(a.query)
+        if a.table_file:
+            case.set_table(cs, json.loads(open(a.table_file, encoding="utf-8").read()))
+        if a.approve:
+            case.approve(cs)
+        if a.stage:
+            case.set_stage(cs, a.stage)
+        if a.companies:
+            cs["companies"] = [{"company_id": c["company_id"], "name": c["name"]}
+                               for c in (resolve_local(n.strip(), None) for n in a.companies.split(",") if n.strip())]
+        if a.report_file:          # 6단계: Claude가 뼈대대로 쓴 보고서 md 등록
+            f = Path(a.report_file).resolve()
+            if not f.exists():
+                sys.exit(f"보고서 파일이 없습니다: {f}")
+            path = str(f.relative_to(case.ROOT)).replace("\\", "/") if case.ROOT in f.parents else str(f)
+            cs["outputs"] = [o for o in cs.get("outputs", []) if o.get("kind") != "보고서"] + [
+                {"kind": "보고서", "name": "보고서", "path": path, "pdf": None}]
+        if a.outputs:              # 6단계: 검증표·역할구분 만들기 + 보고서 PDF
+            for o in report.make_case(cs):
+                print(f"  {o['name']}: {o['path']}" + (f" / {o['pdf']}" if o.get("pdf") else " / PDF 못 만듦"))
+            print("  검증표: " + ", ".join(f"{k} {v}건" for k, v in cs.get("verify", {}).items()))
+        if a.run:
+            done = case.run_companies(cs, cs["companies"])
+            print("내 9단계로 계산 (외부 요청 없음): " + ", ".join(done.values()))
+        case.save(cs)
+        case.save_book(cs, case.load_book(cs))
+    except notebook.NotebookError as e:
+        sys.exit(f"과제에 적지 않았습니다: {e}")
+    print(f"\n=== 과제 {cs['id']} | {cs['title']} | 지금 {cs['stage']}단계 ({case.STAGES[cs['stage']]}) ===")
+    print(f"자료: IN {cs['in_file'] or '-'} / PRE {cs['pre_file'] or '-'} · 대응표 질문 {len(cs['questions'])}개 · "
+          + (f"승인 {cs['approved'][:10]}" if cs["approved"] else "승인 전"))
+    for q in cs["questions"]:
+        print(f"  q{q['no']} {q['q']} | PRE {q['pre'] or '-'} | 부품 {q['parts'] or '-'}" + (f" | 없으면 {q['missing']}" if q["missing"] else ""))
+    for r in case.grid(cs):
+        print(f"  {r['name']}: " + " · ".join(f"{k} {v['status']}" for k, v in sorted(r["steps"].items(), key=lambda kv: int(kv[0]))))
+
+
 def cashflow_cmd(a) -> None:
     """분석 도구: 현금 창출 — 결과만 보여준다 (판정 없음)."""
     c = resolve_local(a.query, a.pick)
@@ -503,6 +758,7 @@ def quality_cmd(a) -> None:
         print(f"\n[5년 중 신호가 켜진 해] B 매출채권 {n('B')} | 계약자산 {n('B_ca')} | C 재고 {n('C')} | "
               f"D 작은 이익 {n('D')} | E 빅 배스 {n('E')}")
         print("   A 발생액/자산이 플러스 = 순이익이 영업CF보다 큼 (현금이 덜 들어온 이익)")
+        print("   B·B*·C 신호 = 매출은 줄었는데 늘었거나, 매출보다 빨리 늘어난 해가 2년 연속 (2026-11-20 사용자 결정)")
         notes = [(x["year"], t) for x in r["rows"] for t in x["notes"]]
         if notes:
             print("\n[연도별 표시]")

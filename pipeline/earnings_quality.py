@@ -6,9 +6,11 @@
 - 기간 최근 5년. 판정 없이 결과만 표시. 표시는 데이터에 있는 사실만.
 - 순이익은 기준 2와 같은 연결 순이익.
 - A 발생액: (순이익 − 영업CF) ÷ 평균 총자산 ((기초 + 기말) ÷ 2)
-- B 매출채권: 매출채권 증가율과 매출 증가율을 나란히 놓고, 매출보다 빨리 늘었는지 표시.
+- B 매출채권: 매출채권 증가율과 매출 증가율을 나란히 놓는다.
   매출채권만 쓰고, 매출채권및기타채권뿐인 해는 '범위 차이'. 계약자산(미청구공사)은 별도 줄로 함께 표시.
-- C 재고: 재고 증가율과 매출 증가율을 나란히 놓고, 매출보다 빨리 늘었는지 표시.
+- C 재고: 재고 증가율과 매출 증가율을 나란히 놓는다.
+- B·C 신호 (2026-11-20 변경): ② 매출은 줄었는데 그 항목은 늘었거나, ③ 매출보다 빨리 늘어난 해가 2년 연속.
+  (처음 결정 '매출보다 빨리 늘면 표시'는 29개사 회사×연도의 절반 이상에서 켜져서 바꿈)
 - D 작은 이익: 순이익 ÷ 평균 총자산이 0% 이상 1% 미만인 해.
 - E 빅 배스: 새 대표이사가 처음 서명한 사업보고서(10-K)의 연도에 순손실이거나, 순이익이 전년의 절반 이하.
 """
@@ -119,9 +121,23 @@ def analyze(company_id: str, years: int = YEARS) -> dict:
                "rev_g": rev_g, "rec_g": rec_g, "ca_g": ca_g, "inv_g": inv_g, "ceo": out["ceo"].get(y),
                "B": None, "B_ca": None, "C": None, "D": None, "E": None, "notes": []}
         if not fin:
-            row["B"] = (rec_g > rev_g) if (rec_g is not None and rev_g is not None) else None
-            row["B_ca"] = (ca_g > rev_g) if (ca_g is not None and rev_g is not None) else None
-            row["C"] = (inv_g > rev_g) if (inv_g is not None and rev_g is not None) else None
+            # 신호 B·B*·C (사용자 결정 2026-11-20, 처음 결정 '매출보다 빨리 늘면 표시'를 바꿈: 거의 모든 회사에서 켜져서)
+            #   ② 매출은 줄었는데 그 항목은 늘었다  또는  ③ 매출보다 빨리 늘어난 해가 2년 연속 (전년도 포함)
+            rev_g0 = _growth(g(y - 1, "revenue"), g(y - 2, "revenue"))
+            for key, cur_g, item in (("B", rec_g, "receivables"), ("B_ca", ca_g, "contract_assets"), ("C", inv_g, "inventory")):
+                prev_g = _growth(g(y - 1, item), g(y - 2, item))
+                fast = (cur_g > rev_g) if (cur_g is not None and rev_g is not None) else None
+                fast0 = (prev_g > rev_g0) if (prev_g is not None and rev_g0 is not None) else None
+                row[key + "_fast"] = fast                          # 사실: 매출보다 빨리 늘었나
+                if fast is None:
+                    row[key] = None
+                else:
+                    cross = rev_g < 0 and cur_g > 0
+                    row[key] = bool(cross or (fast and fast0))
+                    if row[key]:
+                        why = "매출은 줄었는데 늘어남" if cross else "2년 연속 매출보다 빨리 늘어남"
+                        label = {"B": "B 매출채권", "B_ca": "B* 계약자산", "C": "C 재고"}[key]
+                        row["notes"].append(f"{label} 신호: {why}")
         row["D"] = (SMALL_PROFIT[0] <= roa < SMALL_PROFIT[1]) if roa is not None else None
 
         # E: 새 대표이사의 첫 연도

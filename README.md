@@ -64,6 +64,10 @@ uv sync
 uv run data.py fin 삼성전자 매출액
 ```
 
-## 분석 진행 화면 (준비 중)
+## 분석 진행 화면 (만드는 중: 지금은 2 현금 창출만)
 
-분석 단계를 정해진 순서로 돌리는 엔진을 먼저 만들고(터미널), 그 위에 내 컴퓨터에서만 여는 Streamlit 화면을 얹는다. 인터넷 공개 배포는 하지 않는다 (2026-11-20 결정, 기존 원본 탐색 화면 `dashboard.py`는 삭제).
+```bash
+uv run server.py                # http://localhost:8501 (내 컴퓨터에서만 열림, 설치 필요 없음)
+```
+
+엔진(`pipeline/flow.py`, `data.py run`)이 계산해 회사별 공책(`pipeline/notebook.py`)에 적고, 화면(`web/`, 시안을 옮긴 HTML)은 연결 프로그램(`server.py`)을 거쳐 공책을 보여주며 판단을 받는다. 피드백은 Claude Code 대화창에서 받는다. 인터넷 공개 배포는 하지 않는다 (2026-11-20 결정, 기존 원본 탐색 화면 `dashboard.py`는 삭제). 단계: `analyses/_투자_분석_단계.md`

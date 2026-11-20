@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>기업분석 진행판</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div>
+    <span class="sub">내 컴퓨터에서만 여는 화면 · 계산은 엔진, 판단은 나, 피드백은 Claude Code 대화창</span>
+    <h1>기업분석 진행판</h1>
+  </div>
+  <div class="pick">
+    <label for="co">회사</label>
+    <select id="co"><option value="">회사를 고르세요 (받아 둔 회사만)</option></select>
+    <button id="start" class="btn-start" type="button">분석 시작</button>
+  </div>
+</header>
+
+<nav class="tabs" aria-label="방 선택">
+  <button type="button" data-tab="basic" class="tab on">기본 분석 방 <span>· 내 기준 9단계 (고정)</span></button>
+  <button type="button" data-tab="case" class="tab">과제 방 <span>· 주차별 과제</span></button>
+</nav>
+
+<div id="msg" class="msg" role="status" hidden></div>
+
+<main id="basic">
+  <section id="progress" class="card" hidden></section>
+
+  <div class="row">
+    <aside id="profile" class="card profile"></aside>
+    <section id="price" class="card price" aria-label="주가"></section>
+  </div>
+
+  <div id="empty" class="card empty">회사를 고르고 '분석 시작'을 누르세요.</div>
+  <section id="info" class="card lane-info" hidden></section>
+  <section id="discuss" class="card lane-discuss" hidden></section>
+  <section id="final" class="card lane-final" hidden></section>
+  <section id="hold" class="card lane-info" hidden></section>
+  <details id="roles" class="card" hidden><summary>역할 기록 (자동)</summary><div></div></details>
+</main>
+
+<main id="case" hidden></main>
+
+</div>
+<script src="app.js"></script>
+<script src="case.js"></script>
+</body>
+</html>
