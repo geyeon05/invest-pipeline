@@ -26,6 +26,19 @@ button:disabled { cursor: not-allowed; }
 .pick { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .pick label { font-size: 14px; color: #C9DAEA; }
 .pick select { min-width: 240px; height: 44px; border: 0; border-radius: 10px; padding: 0 12px; font-size: 15px; font-family: inherit; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.search { position: relative; }
+.search input { width: 340px; max-width: 70vw; height: 44px; border: 0; border-radius: 10px; padding: 0 14px; font-size: 15px; font-family: inherit; }
+.colist { position: absolute; z-index: 10; top: 48px; left: 0; width: 100%; max-height: 360px; overflow-y: auto; margin: 0; padding: 4px;
+  list-style: none; background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
+.colist li { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; padding: 4px 10px; border-radius: 8px;
+  color: var(--ink); cursor: pointer; font-size: 14px; }
+.colist li.act, .colist li:hover { background: var(--navy-bg); }
+.colist .meta { font-size: 12px; color: var(--muted); }
+.colist .none { color: var(--muted); cursor: default; }
+.filters { display: flex; gap: 4px; }
+.fchip { min-height: 44px; border: 1px solid #5B7A97; background: transparent; color: #DCE7F1; border-radius: 10px; padding: 0 10px; font-size: 13px; }
+.fchip.on { background: #fff; color: var(--navy); font-weight: 700; }
 .btn-start { height: 44px; border: 0; border-radius: 10px; padding: 0 18px; background: var(--gold); color: var(--ink); font-weight: 700; font-size: 15px; }
 
 .tabs { display: flex; flex-wrap: wrap; gap: 8px; }

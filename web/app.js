@@ -87,7 +87,7 @@ function renderProgress(v, round, pages, st) {
   const missing = [1, 2, 3, 4, 5, 6, 7, 8].filter((n) => !v.implemented.includes(n));
   const w = (n) => `${(n / 9) * 100}%`;
   $("progress").innerHTML = `
-    <div class="head"><h2>${esc(v.company.name)} · ${round.no}회차 (${esc(round.mode)}) · 진행 상황</h2><span class="muted">전체 9단계</span></div>
+    <div class="head"><h2>${esc(v.company.name)} · ${round.no}회차 (${esc(round.mode)}) · 진행 상황</h2></div>
     <div class="bar" aria-hidden="true">
       <div style="width:${w(doneN)};background:var(--green)"></div><div style="width:${w(discN)};background:var(--orange)"></div>
       <div style="width:${w(infoN)};background:#7FB89A"></div><div style="width:${w(missing.length)};background:var(--gray)"></div>
@@ -123,7 +123,7 @@ function renderInfo(info, st) {
   const pageOpen = sel ? sel.checks.filter((c) => c.status === "open").length : 0;
   $("info").innerHTML = `
     <div class="head" style="justify-content:flex-start;gap:8px 16px"><h2>단순 정보</h2>
-      <span class="muted" style="color:var(--green-ink)">${info.length ? `켜진 신호가 없는 ${info.length}단계 · 숫자를 확인만 하고 넘어가도 된다` : "지금은 없음"}</span></div>
+      <span class="muted" style="color:var(--green-ink)">${info.length ? `${info.length}단계` : "없음"}</span></div>
     <div class="chips">${info.map((p) => `
       <button type="button" class="chip ${S.infoOpen === p.no ? "on" : ""}" data-info="${p.no}" aria-expanded="${S.infoOpen === p.no}">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2F855A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg>
@@ -166,8 +166,7 @@ function renderDiscuss(list, st, v) {
     input = `<label class="label" for="ta">내 판단 (초안)</label><textarea id="ta" rows="3" data-key="${esc(key("draft"))}">${esc(S.drafts[key("draft")] || "")}</textarea>
       <div><button type="button" class="primary" data-act="draft" data-step="${p.no}" data-item="${S.item}">피드백 받기</button></div>`;
   } else if (s === "피드백 기다림") {
-    input = `<p class="note">초안을 공책에 적었다. Claude Code 대화창에서 <b>"${esc(v.company.name)} ${p.no}번 ${S.item}항목 피드백해줘"</b>라고 하면
-      피드백이 여기에 저절로 나타난다 (몇 초마다 공책을 다시 읽음).</p>`;
+    input = `<p class="note">대화창: <b>"${esc(v.company.name)} ${p.no}번 ${S.item}항목 피드백해줘"</b></p>`;
   } else if (s === "피드백 도착") {
     input = `<label class="label" for="ta">고친 판단</label>
       <textarea id="ta" rows="3" data-key="${esc(key("revise"))}" placeholder="피드백을 보고 다시 생각한 판단을 쓴다. 바꾸지 않아도 되고, 그 이유를 적는다">${esc(S.drafts[key("revise")] || "")}</textarea>
@@ -180,15 +179,14 @@ function renderDiscuss(list, st, v) {
   const gone = p.items.filter((x) => x.gone);
 
   box.innerHTML = `
-    <div class="head" style="justify-content:flex-start;gap:8px 16px"><h2>논의할 부분</h2>
-      <span class="muted">켜진 신호 하나하나가 논의 항목 · 누르면 오른쪽에 열린다</span></div>
+    <div class="head" style="justify-content:flex-start;gap:8px 16px"><h2>논의할 부분</h2></div>
     <div class="split">
       <div class="list">${list.map((x) => `
         <button type="button" class="item ${x.no === S.sel ? "on" : ""}" data-sel="${x.no}">
           <span class="t"><span>${x.no}. ${esc(x.name)}</span><span class="badge ${st(x) === "확정" ? "done" : ""}">${esc(st(x))}</span></span>
           <span class="s">${liveItems(x).map((i) => esc(i.title)).join(" · ")}</span></button>`).join("")}</div>
       <div class="detail">
-        <div><h3>${p.no}. ${esc(p.name)}</h3><span class="muted">이 단계가 묻는 것: ${esc(STEP_Q[p.no] || "")}</span></div>
+        <div><h3>${p.no}. ${esc(p.name)}</h3><span class="muted">${esc(STEP_Q[p.no] || "")}</span></div>
         <div><div class="label">핵심 사실</div><ul class="facts">${p.summary.map((l) => `<li>${esc(l)}</li>`).join("")}</ul></div>
         <div class="src">출처: ${esc(srcText(p))}</div>
         ${STEP_PROFILE[p.no] ? `<div class="mine"><div class="k">관련된 내 성향</div>${esc(STEP_PROFILE[p.no])}</div>` : ""}
@@ -200,7 +198,6 @@ function renderDiscuss(list, st, v) {
         <div class="stages" aria-label="판단 단계">${stage(1, "① 초안")}${stage(2, "② 피드백")}${stage(3, "③ 확정")}</div>
         ${log}${checksHtml(it.checks, "확인할 것 (이 항목)")}${input}
         ${gone.length ? `<span class="muted">다시 계산하니 사라진 신호: ${gone.map((x) => esc(x.title)).join(", ")}</span>` : ""}
-        <span class="muted">초안 · 피드백 · 확정 판단은 모두 날짜와 함께 이 회사의 공책에 쌓인다</span>
       </div></div>`;
   box.querySelectorAll("[data-sel]").forEach((b) => (b.onclick = () => { S.sel = Number(b.dataset.sel); S.item = 1; render(); }));
   box.querySelectorAll("[data-it]").forEach((b) => (b.onclick = () => { S.item = Number(b.dataset.it); render(); }));
@@ -213,10 +210,9 @@ function renderPrice() {
     ${P && P.have ? `<div class="btns" role="group" aria-label="기간">
       <button type="button" class="${S.range === "y1" ? "primary" : "ghost"}" data-range="y1">1년</button>
       <button type="button" class="${S.range === "y5" ? "primary" : "ghost"}" data-range="y5">5년</button></div>` : ""}</div>`;
-  if (!v) { $("price").innerHTML = head + `<p class="muted">회사를 고르면 받아 둔 주가가 나옵니다.</p>`; return; }
+  if (!v) { $("price").innerHTML = head + `<p class="muted">-</p>`; return; }
   if (!P || !P.have) {
-    $("price").innerHTML = head + `<p class="muted">이 회사의 주가를 아직 받지 않았습니다. 주가는 외부 자료(Yahoo Finance)라,
-      Claude Code 대화창에서 요청 수를 확인하고 승인한 뒤 받습니다 (예: "${esc(name)} 주가 받아줘"). 받으면 여기에 저절로 나옵니다.</p>`;
+    $("price").innerHTML = head + `<p class="muted">주가를 아직 받지 않음 · 대화창에서 승인 후 받으면 여기에 나옴</p>`;
     return;
   }
   const ser = P[S.range], vals = ser.map((x) => x.value), n = vals.length;
@@ -266,10 +262,9 @@ function renderFinal(pages, st, v) {
   let body;
   if (lock.length) {
     body = `<div class="locked"><b>아직 잠김 · 남은 것 ${lock.length}개</b>
-      <span class="muted">1~8단계가 모두 끝나야 열린다 (단순 정보는 '확인함', 논의 항목은 모두 확정)</span>
       <ul class="facts" style="font-size:13px">${lock.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>`;
   } else if (!fp) {
-    body = `<p class="note">1~8단계가 모두 끝났다. 최종 판단을 열면 확정한 판단과 금리·환율을 한 장에 모아 보여준다.</p>
+    body = `<p class="note">1~8단계 끝 · 최종 판단을 열 수 있음</p>
       <div><button type="button" class="primary" data-act="open-final" data-step="9">최종 판단 열기</button></div>`;
   } else {
     const it = fp.items[0], meta = (v.items["9"] || [])[0] || { status: "초안 전", open: 0 };
@@ -288,7 +283,7 @@ function renderFinal(pages, st, v) {
         <textarea id="ta" rows="4" data-key="${esc(key("draft"))}">${esc(S.drafts[key("draft")] || "")}</textarea>
         <div><button type="button" class="primary" data-act="draft" data-step="9" data-item="1">피드백 받기</button></div>`;
     } else if (s === "피드백 기다림") {
-      input = `<p class="note">Claude Code 대화창에서 <b>"${esc(v.company.name)} 최종 판단 피드백해줘"</b>라고 하면 냉정한 피드백과 반박해야 할 주장이 여기에 나타난다.</p>`;
+      input = `<p class="note">대화창: <b>"${esc(v.company.name)} 최종 판단 피드백해줘"</b></p>`;
     } else if (s === "피드백 도착") {
       const ch = S.drafts[key("choice")] || "";
       input = `<fieldset style="border:0;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:8px"><legend class="label">결론</legend>
@@ -306,7 +301,7 @@ function renderFinal(pages, st, v) {
       input = `<div class="checks"><b style="font-size:13px">결과물 3종 (분석 보고서 · 검증표 · 역할구분, md + PDF)</b>
           ${outs ? `<span class="muted">만든 때 ${esc(when(outs.at))} · 검증표: ${Object.entries(outs.verify).map(([k, n]) => `${esc(k)} ${n}건`).join(", ")}</span>
             <ul class="facts" style="font-size:14px">${Object.entries(outs.files).map(([k, f]) => `<li>${esc(k)}: ${f.pdf ? link(f.pdf) : "PDF 못 만듦"} · ${link(f.md)}</li>`).join("")}</ul>`
-          : `<span class="muted">최종 판단을 확정했다. 공책에 적힌 것만으로 세 문서를 만든다 (새 주장·새 숫자 없음). 저장 위치: 이 회사 공책 폴더 (GitHub에 올리지 않음).</span>`}
+          : `<span class="muted">공책에 적힌 것만으로 만든다</span>`}
           <div class="btns"><button type="button" class="primary" data-act="outputs" data-step="9">${outs ? "다시 만들기" : "결과물 만들기"}</button>
           <button type="button" class="ghost" data-act="reopen" data-step="9" data-item="1">다시 열기</button></div></div>`;
     }
@@ -314,8 +309,7 @@ function renderFinal(pages, st, v) {
       <div class="stages" aria-label="판단 단계">${stage(1, "① 초안")}${stage(2, "② 피드백")}${stage(3, "③ 확정")}</div>
       ${log}${checksHtml(it.checks, "확인할 것")}${input}`;
   }
-  box.innerHTML = `<h2>9. 최종 판단</h2>
-    <p class="muted">확정한 판단들을 모아 보고, 살지 기다릴지를 쓴다. 최종 판단도 초안 → 피드백 → 확인할 것 → 확정을 거친다.</p>${body}`;
+  box.innerHTML = `<h2>9. 최종 판단</h2>${body}`;
 }
 
 function renderHold(v) {
@@ -326,13 +320,13 @@ function renderHold(v) {
   let html = `<div class="head"><h2>보유 중 점검</h2>${v.holding ? `<span class="badge done">보유 중 · ${esc(v.holding.since)}부터</span>`
     : v.sold ? `<span class="badge">판 기록 · ${esc(v.sold.sold)}</span>` : ""}</div>`;
   if (!v.holding && !v.sold) {
-    html += `<p class="muted">최종 판단이 '산다'다. <b>실제로 샀을 때만</b> 기록한다 → 보유 목록(analyses/_보유목록.md, GitHub에 올리지 않음)에 추가되고 보유 점검을 할 수 있다.</p>
+    html += `<p class="muted"><b>실제로 샀을 때만</b> 누른다</p>
       <div class="btns" style="align-items:center"><label class="label" for="bday">산 날짜</label>
       <input id="bday" type="date" value="${new Date().toISOString().slice(0, 10)}" style="min-height:44px;border:1px solid #C9D4DF;border-radius:10px;padding:0 10px;font-family:inherit">
       <input id="bnote" placeholder="메모 (선택)" aria-label="메모" style="min-height:44px;border:1px solid #C9D4DF;border-radius:10px;padding:0 10px;font-family:inherit">
       <button type="button" class="primary" data-act="bought" data-step="9">샀다</button></div>`;
   } else if (v.holding) {
-    html += `<p class="muted"><b>산 이유:</b> ${esc(v.holding.reason)}<br>정기 점검은 새 사업보고서가 나올 때(1년에 1번), 바로 점검은 대표이사 변경·유상증자·전환사채·소송·제재·중대재해·대주주 지분 변동이 생겼을 때 (보유-①).</p>
+    html += `<p class="muted"><b>산 이유:</b> ${esc(v.holding.reason)}</p>
       <div class="btns" style="align-items:center"><label class="label" for="hreason">점검 이유</label>
       <select id="hreason" style="min-height:44px;border:1px solid #C9D4DF;border-radius:10px;padding:0 10px;font-family:inherit"><option>정기</option><option>바로</option></select>
       <button type="button" class="primary" data-act="start-check" data-step="9">보유 점검 시작</button></div>`;
@@ -353,7 +347,7 @@ function renderHold(v) {
       input = `<label class="label" for="ta">내 판단 (초안)</label><textarea id="ta" rows="3" data-key="${esc(key("draft"))}">${esc(S.drafts[key("draft")] || "")}</textarea>
         <div><button type="button" class="primary" data-act="draft" ${attrs}>피드백 받기</button></div>`;
     } else if (meta.status === "피드백 기다림") {
-      input = `<p class="note">Claude Code 대화창에서 <b>"${esc(v.company.name)} ${esc(p.name.split(" (")[0])} ${n}항목 피드백해줘"</b>라고 하면 피드백이 여기에 나타난다.</p>`;
+      input = `<p class="note">대화창: <b>"${esc(v.company.name)} ${esc(p.name.split(" (")[0])} ${n}항목 피드백해줘"</b></p>`;
     } else if (meta.status === "피드백 도착") {
       const ch = S.drafts[key("choice")] || "";
       input = (isDec ? `<fieldset style="border:0;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:8px"><legend class="label">결론</legend>${v.hold_choices.map((c) =>
@@ -367,7 +361,7 @@ function renderHold(v) {
       ${checksHtml(p.checks, "확인할 것 (이 점검 전체)")}
       <div class="chips">${items.map((x, i) => `<button type="button" class="chip ${i + 1 === n ? "on" : ""}" data-hit="${esc(sk)}|${i + 1}"><b>(${i + 1}) ${esc(x.title)}</b><span class="s">${esc(metas[i].status)}</span></button>`).join("")}</div>
       <div class="entry"><span class="k">(${n}) ${esc(it.title)}</span>${esc(it.detail)}</div>
-      ${isDec ? `<span class="muted">결론은 앞의 항목을 모두 확정한 뒤에 확정할 수 있다</span>` : ""}
+      ${isDec ? `<span class="muted">앞 항목을 모두 확정한 뒤 확정</span>` : ""}
       <div class="stages">${stage(1, "① 초안")}${stage(2, "② 피드백")}${stage(3, "③ 확정")}</div>${log}${checksHtml(it.checks, "확인할 것 (이 항목)")}${input}</div>`;
   }
   box.innerHTML = html;
@@ -432,20 +426,85 @@ document.querySelectorAll(".tab").forEach((t) => (t.onclick = () => {
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("on", x === t));
   $("basic").hidden = t.dataset.tab !== "basic"; $("case").hidden = t.dataset.tab !== "case";
 }));
-$("co").onchange = (e) => load(e.target.value).catch((err) => say(err.message, false));
+// ---------- 회사 검색 (받아 둔 회사만, 외부 요청 없음) ----------
+const Q = { list: [], filter: "all", hits: [], act: 0 };
+const norm = (t) => String(t || "").toLowerCase().replace(/\(주\)|주식회사|inc\.?|corp\.?|co\.?|ltd\.?|[\s,.()&-]/g, "");
+
+function searchHits(text) {
+  const q = norm(text);
+  let xs = Q.list.filter((c) => Q.filter === "all" || (Q.filter === "book" ? c.has_book : c.holding));
+  if (q) {
+    xs = xs.map((c) => {
+      const name = norm(c.name), keys = c.keys.split(" ").map(norm);
+      const score = name === q || keys.includes(q) ? 0 : name.startsWith(q) || keys.some((k) => k.startsWith(q)) ? 1
+        : name.includes(q) || keys.some((k) => k.includes(q)) ? 2 : 9;
+      return { c, score };
+    }).filter((x) => x.score < 9).sort((a, b) => a.score - b.score || (b.c.has_book - a.c.has_book) || a.c.name.localeCompare(b.c.name, "ko")).map((x) => x.c);
+  } else {
+    xs = xs.slice().sort((a, b) => (b.holding - a.holding) || (b.has_book - a.has_book) || a.name.localeCompare(b.name, "ko"));
+  }
+  return xs.slice(0, 30);
+}
+
+function showHits() {
+  const ul = $("colist"), inp = $("co");
+  Q.hits = searchHits(inp.value);
+  Q.act = Math.min(Q.act, Math.max(Q.hits.length - 1, 0));
+  ul.innerHTML = Q.hits.length ? Q.hits.map((c, i) => `<li role="option" id="co-${i}" class="${i === Q.act ? "act" : ""}" data-pick="${esc(c.company_id)}" aria-selected="${i === Q.act}">
+      <span>${esc(c.name)} <span class="meta">${esc(c.ticker || "")}</span></span>
+      <span class="meta">${c.holding ? "보유 중" : c.has_book ? "분석 중" : ""}</span></li>`).join("")
+    : `<li class="none">받아 둔 회사 중에 없음 · 새 회사는 대화창에서 "투자 분석 시작 ${esc(inp.value)}" (수집은 승인 후)</li>`;
+  ul.hidden = false;
+  inp.setAttribute("aria-expanded", "true");
+  inp.setAttribute("aria-activedescendant", Q.hits.length ? `co-${Q.act}` : "");
+}
+
+function hideHits() { $("colist").hidden = true; $("co").setAttribute("aria-expanded", "false"); }
+
+async function pick(cid) {
+  const c = Q.list.find((x) => x.company_id === cid);
+  if (!c) return;
+  $("co").value = c.name;
+  hideHits();
+  await load(cid);
+}
+
+$("co").addEventListener("input", () => { Q.act = 0; showHits(); });
+$("co").addEventListener("focus", showHits);
+$("co").addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    if ($("colist").hidden) return showHits();
+    Q.act = (Q.act + (e.key === "ArrowDown" ? 1 : -1) + Q.hits.length) % Math.max(Q.hits.length, 1);
+    showHits();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    if (Q.hits[Q.act]) pick(Q.hits[Q.act].company_id).catch((err) => say(err.message, false));
+  } else if (e.key === "Escape") hideHits();
+});
+$("colist").addEventListener("mousedown", (e) => {        // blur 전에 고르게 mousedown
+  const li = e.target.closest("[data-pick]");
+  if (li) { e.preventDefault(); pick(li.dataset.pick).catch((err) => say(err.message, false)); }
+});
+$("co").addEventListener("blur", () => setTimeout(hideHits, 100));
+document.querySelectorAll(".fchip").forEach((b) => (b.onclick = () => {
+  Q.filter = b.dataset.f;
+  document.querySelectorAll(".fchip").forEach((x) => x.classList.toggle("on", x === b));
+  $("co").focus(); showHits();
+}));
+async function refreshIndex() { Q.list = await api("/api/companies"); }
+
 $("start").onclick = async () => {
   if (!S.cid) return say("회사를 먼저 고르세요.", false);
-  if (S.view && S.view.book) return say("이미 공책이 있습니다. 다시 분석(새 회차)은 대화창에서 '처음부터 / 바뀐 부분만'을 정해 진행합니다.", false);
-  try { S.view = await api("/api/run", { cid: S.cid }); S.lastUpdated = S.view.book.updated; say("계산해서 공책을 만들었습니다.", true); }
+  if (S.view && S.view.book) return say("이미 공책이 있습니다. 다시 분석(새 회차)은 대화창에서 정합니다.", false);
+  try { S.view = await api("/api/run", { cid: S.cid }); S.lastUpdated = S.view.book.updated; say("공책을 만들었습니다.", true); await refreshIndex(); }
   catch (err) { say(err.message, false); }
   render();
 };
 
 (async () => {
-  const list = await api("/api/companies");
-  $("co").insertAdjacentHTML("beforeend", list.map((c) =>
-    `<option value="${esc(c.company_id)}">${esc(c.name)} (${esc(c.ticker || c.company_id)})</option>`).join(""));
+  await refreshIndex();
   const pre = new URLSearchParams(location.search).get("cid");   // 주소에 ?cid=KR:00126380 을 붙이면 그 회사로 바로 열기
-  if (pre && list.some((c) => c.company_id === pre)) { $("co").value = pre; await load(pre); return; }
+  if (pre && Q.list.some((c) => c.company_id === pre)) { await pick(pre); return; }
   render();
 })().catch((err) => say("서버에 연결하지 못했습니다: " + err.message, false));

@@ -22,7 +22,7 @@ function flowHtml(scope, page, itNo, meta, ask) {
     input = `<label class="label" for="cta">내 판단 (초안)</label><textarea id="cta" rows="3" data-ckey="${esc(key("draft"))}">${esc(C.drafts[key("draft")] || "")}</textarea>
       <div><button type="button" class="primary" ${attrs} data-kind="draft">피드백 받기</button></div>`;
   } else if (s === "피드백 기다림") {
-    input = `<p class="note">Claude Code 대화창에서 <b>"${esc(ask)}"</b>라고 하면 피드백이 여기에 저절로 나타난다.</p>`;
+    input = `<p class="note">대화창: <b>"${esc(ask)}"</b></p>`;
   } else if (s === "피드백 도착") {
     input = `<label class="label" for="cta">고친 판단</label><textarea id="cta" rows="3" data-ckey="${esc(key("revise"))}">${esc(C.drafts[key("revise")] || "")}</textarea>
       <div class="btns"><button type="button" class="primary" ${attrs} data-kind="confirm" ${meta.open ? "disabled" : ""}>${meta.open ? `확정 불가 · 확인할 것 ${meta.open}건 남음` : "확정"}</button>
@@ -40,10 +40,9 @@ function caseRender() {
   const v = C.view;
   const chips = C.list.map((x) => `<button type="button" class="chip ${x.id === C.id ? "on" : ""}" data-case="${esc(x.id)}">
       <b>${esc(x.title)}</b><span class="s">${x.stage}/7 · ${esc(x.id)}</span></button>`).join("");
-  let html = `<section class="card"><div class="head"><h2>과제 목록</h2>
-      <span class="muted">cases/ 에 과제가 생기면 저절로 나타남</span></div>
+  let html = `<section class="card"><div class="head"><h2>과제 목록</h2></div>
     <div class="chips">${chips || `<span class="muted">아직 과제가 없음</span>`}</div>
-    <p class="muted"><b>새 과제 시작:</b> 대화창에서 "기자본 과제 시작 N주차" → 1단계 과제 읽기 → 2단계 대응표 (승인) → 여기서 3~7단계</p></section>`;
+    <p class="muted">새 과제: 대화창에서 "기자본 과제 시작 N주차"</p></section>`;
   if (!v) { root.innerHTML = html; return; }
   const cs = v.case, st = v.stages;
   html += `<section class="card">
@@ -60,7 +59,7 @@ function caseRender() {
     ${cs.questions.length ? `<div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:14px">
       <tr>${["#", "과제 질문", "PRE 관점", "필요한 재료", "쓸 부품", "없으면"].map((h) => `<th style="text-align:left;border-bottom:2px solid var(--line);padding:6px">${h}</th>`).join("")}</tr>
       ${cs.questions.map((q) => `<tr>${[q.no, q.q, q.pre, q.need, q.parts, q.missing || "−"].map((c) => `<td style="border-bottom:1px solid var(--line);padding:6px;vertical-align:top">${esc(c)}</td>`).join("")}</tr>`).join("")}
-    </table></div>` : `<p class="muted">2단계에서 대화창으로 정한다.</p>`}</section>`;
+    </table></div>` : `<p class="muted">-</p>`}</section>`;
 
   // 3단계: 회사 × 단계
   const steps = ["1", "2", "3", "4", "5", "6", "7", "8"];
@@ -83,8 +82,7 @@ function caseRender() {
   html += `<section class="card lane-discuss"><div class="head"><h2>3단계 · 내 9단계로 회사 분석</h2>
       <div class="btns"><button type="button" class="${C.mode === "step" ? "primary" : "ghost"}" data-mode="step">단계별 보기</button>
       <button type="button" class="${C.mode === "company" ? "primary" : "ghost"}" data-mode="company">회사별 보기</button></div></div>
-    <span class="muted">논의는 단계별로 회사끼리 비교하며 한다 · 약속 이행에서 탈락해도 끝까지 본다 · 9번 최종 판단은 5단계 주장으로 대신</span>
-    ${v.grid.length ? `<div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%">${table}</table></div>` : `<p class="muted">분석할 회사가 아직 없다 (2단계 대응표에서 정함).</p>`}
+    ${v.grid.length ? `<div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%">${table}</table></div>` : `<p class="muted">-</p>`}
     <div id="ccell"></div></section>`;
 
   // 4단계 질문 · 5단계 주장
@@ -92,12 +90,11 @@ function caseRender() {
   const qkeys = Object.keys(r.steps).filter((k) => k.startsWith("q")).sort((a, b) => a.slice(1) - b.slice(1));
   if (!C.q || !r.steps[C.q]) C.q = qkeys[0] || "claim";
   html += `<section class="card lane-discuss"><div class="head"><h2>4단계 · 과제 질문에 답하기</h2></div>
-    ${qkeys.length ? `<div class="chips">${qkeys.map((k) => `<button type="button" class="chip ${C.q === k ? "on" : ""}" data-q="${k}"><b>${esc(r.steps[k].name)}</b><span class="s">${esc(bv.status[k])}</span></button>`).join("")}</div>` : `<p class="muted">대응표의 질문이 생기면 여기에 나온다.</p>`}
+    ${qkeys.length ? `<div class="chips">${qkeys.map((k) => `<button type="button" class="chip ${C.q === k ? "on" : ""}" data-q="${k}"><b>${esc(r.steps[k].name)}</b><span class="s">${esc(bv.status[k])}</span></button>`).join("")}</div>` : `<p class="muted">-</p>`}
     ${C.q && C.q !== "claim" && r.steps[C.q] ? pageHtml({}, r.steps[C.q], bv, `${cs.id} 질문 ${C.q.slice(1)} 피드백해줘`) : ""}</section>
     <section class="card lane-final"><div class="head"><h2>5단계 · 주장 정하기</h2><span class="badge">${esc(bv.status.claim || "")}</span></div>
     ${r.steps.claim ? pageHtml({}, r.steps.claim, bv, `${cs.id} 주장 피드백해줘`) : ""}</section>
     <section class="card"><h2>6단계 · 결과물 / 7단계 · 마무리</h2>
-      <p class="muted">보고서는 대화창에서 사용자가 준 뼈대대로 Claude가 쓴다 (확정한 판단·검증한 수치만). 검증표·역할구분은 공책에서 저절로 만든다. 모두 reports/ 에 md + PDF (PDF는 GitHub에 올리지 않음).</p>
       ${(cs.outputs || []).length ? `<ul class="facts">${cs.outputs.map((o) => `<li><b>${esc(o.name)}</b>: ${outLink(cs.id, o.pdf)} · ${outLink(cs.id, o.path)}</li>`).join("")}</ul>` : ""}
       ${cs.verify ? `<span class="muted">검증표: ${Object.entries(cs.verify).map(([k, n]) => `${esc(k)} ${n}건`).join(", ")}</span>` : ""}
       <div><button type="button" class="primary" data-outputs>${(cs.outputs || []).some((o) => o.kind === "검증표") ? "검증표·역할구분 다시 만들기" : "검증표·역할구분 만들기"}</button></div>

@@ -1,13 +1,11 @@
 [project]
 name = "invest-pipeline"
 version = "0.1.0"
-description = "투자보고서용 데이터 수집 · 저장 · 시각화 파이프라인"
+description = "투자보고서용 공시 데이터 수집 · 분석 엔진 · 내 컴퓨터용 분석 진행 화면"
 requires-python = ">=3.11"
 dependencies = [
     "requests>=2.31",
     "pandas>=2.2",
-    "streamlit>=1.38",
-    "plotly>=5.22",
     "python-dotenv>=1.0",
     "yfinance>=1.8.0",
 ]

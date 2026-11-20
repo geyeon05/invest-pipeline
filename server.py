@@ -28,6 +28,22 @@ def companies() -> list[dict]:
             for r in df.to_dict("records")]
 
 
+def company_index() -> list[dict]:
+    """회사 검색용: 이름·티커·ID·한글 별칭(애플→AAPL 등) + 공책이 있는지·보유 중인지 (받아 둔 회사만, 외부 요청 없음)."""
+    from pipeline.registry import ALIASES
+    alias = {}
+    for k, t in ALIASES.items():
+        alias.setdefault(t.upper(), []).append(k)
+    held = {h["company_id"] for h in holdings.scan()[0]}
+    out = []
+    for c in companies():
+        tick = [t.strip().upper() for t in str(c["ticker"] or "").split(",") if t.strip()]
+        words = [c["name"], c["company_id"], *tick, *[a for t in tick for a in alias.get(t, [])]]
+        out.append({**c, "keys": " ".join(words), "has_book": notebook.path_for(c).exists(),
+                    "holding": c["company_id"] in held})
+    return out
+
+
 def company(cid: str) -> dict:
     c = next((c for c in companies() if c["company_id"] == cid), None)
     if c is None:
@@ -105,7 +121,7 @@ class Handler(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         try:
             if u.path == "/api/companies":
-                return self._json(companies())
+                return self._json(company_index())
             if u.path == "/api/book":
                 return self._json(book_view(company(q.get("cid", ""))))
             if u.path == "/api/cases":

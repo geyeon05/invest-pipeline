@@ -10,20 +10,26 @@
 <div class="wrap">
 
 <header class="top">
-  <div>
-    <span class="sub">내 컴퓨터에서만 여는 화면 · 계산은 엔진, 판단은 나, 피드백은 Claude Code 대화창</span>
-    <h1>기업분석 진행판</h1>
-  </div>
+  <h1>기업분석 진행판</h1>
   <div class="pick">
-    <label for="co">회사</label>
-    <select id="co"><option value="">회사를 고르세요 (받아 둔 회사만)</option></select>
+    <div class="search">
+      <label for="co" class="sr">회사 검색</label>
+      <input id="co" type="search" autocomplete="off" placeholder="회사 이름 · 티커 · 별칭 (예: 삼성, AAPL, 애플)"
+        role="combobox" aria-expanded="false" aria-controls="colist" aria-autocomplete="list">
+      <ul id="colist" class="colist" role="listbox" hidden></ul>
+    </div>
+    <div class="filters" role="group" aria-label="목록 거르기">
+      <button type="button" class="fchip on" data-f="all">전체</button>
+      <button type="button" class="fchip" data-f="book">분석 중</button>
+      <button type="button" class="fchip" data-f="hold">보유 중</button>
+    </div>
     <button id="start" class="btn-start" type="button">분석 시작</button>
   </div>
 </header>
 
 <nav class="tabs" aria-label="방 선택">
-  <button type="button" data-tab="basic" class="tab on">기본 분석 방 <span>· 내 기준 9단계 (고정)</span></button>
-  <button type="button" data-tab="case" class="tab">과제 방 <span>· 주차별 과제</span></button>
+  <button type="button" data-tab="basic" class="tab on">기본 분석</button>
+  <button type="button" data-tab="case" class="tab">과제</button>
 </nav>
 
 <div id="msg" class="msg" role="status" hidden></div>
